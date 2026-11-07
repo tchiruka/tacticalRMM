@@ -1,0 +1,58 @@
+---
+# chrony is the Ubuntu 26.04 default time daemon (verified on 26.04.1).
+# This role owns the chrony sources (CIS 2.3.3.1); the CIS role keeps
+# 2.3.3.2 (_chrony user) and 2.3.3.3 (enabled/running).
+
+- name: Time | Set system locale
+  ansible.builtin.copy:
+    dest: /etc/default/locale
+    content: "LANG={{ baseline_locale }}\n"
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Time | Set timezone
+  community.general.timezone:
+    name: "{{ baseline_timezone }}"
+
+- name: Time | Stop and mask other time daemons (CIS 2.3.1.1 single daemon)
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+    masked: true
+  loop: "{{ baseline_conflicting_time_services }}"
+  when: item in ansible_facts['services']
+
+- name: Time | Configure authorised time sources (CIS 2.3.3.1)
+  ansible.builtin.copy:
+    dest: /etc/chrony/sources.d/site.sources
+    content: |
+      # Managed by Ansible (role baseline). Authorised time sources.
+      {% for server in ntp_servers %}
+      server {{ server }} iburst
+      {% endfor %}
+    owner: root
+    group: _chrony
+    mode: "0640"
+  notify: Restart chrony
+
+- name: Time | Disable distribution default pools (only authorised sources)
+  ansible.builtin.replace:
+    path: /etc/chrony/chrony.conf
+    regexp: '^(pool\s.*)$'
+    replace: '# \1  # disabled by Ansible: see sources.d/site.sources'
+  notify: Restart chrony
+
+- name: Time | Ensure chrony reads sources.d
+  ansible.builtin.lineinfile:
+    path: /etc/chrony/chrony.conf
+    regexp: '^sourcedir\s+/etc/chrony/sources\.d'
+    line: sourcedir /etc/chrony/sources.d
+  notify: Restart chrony
+
+- name: Time | Enable chrony
+  ansible.builtin.systemd_service:
+    name: chrony.service
+    state: started
+    enabled: true

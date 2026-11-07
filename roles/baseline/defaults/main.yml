@@ -1,0 +1,65 @@
+---
+# Set true only for disposable lab VMs that use documentation placeholders.
+baseline_allow_placeholders: false
+
+baseline_timezone: UTC
+# Any *.UTF-8 locale satisfies the TRMM installer's locale check.
+baseline_locale: C.UTF-8
+
+baseline_packages:
+  - acl                # setfacl for Ansible become_user to unprivileged users
+  - age                # backup encryption
+  - ca-certificates
+  - chrony
+  - curl
+  - jq
+  - lsb-release
+  - lynis              # host audit (scripts/audit.sh)
+  - python3-apt
+  - python3-pexpect    # ansible.builtin.expect (TRMM installer)
+  - rsyslog
+  - ufw
+  - unattended-upgrades
+  - wget
+
+# Time daemons that must not run alongside chrony (CIS 2.3.1.1).
+baseline_conflicting_time_services:
+  - systemd-timesyncd.service
+  - ntpsec.service
+  - ntpd-rs.service
+
+# SSH crypto. Every entry is checked against `ssh -Q` on the target in the
+# preflight; the run stops if the installed OpenSSH does not support one.
+# Verified against OpenSSH 10.2p1 (Ubuntu 26.04) on 2026-11-07.
+# chacha20-poly1305 is left out in line with the CIS role default.
+baseline_ssh_ciphers:
+  - aes256-gcm@openssh.com
+  - aes128-gcm@openssh.com
+  - aes256-ctr
+  - aes192-ctr
+  - aes128-ctr
+baseline_ssh_macs:
+  - hmac-sha2-512-etm@openssh.com
+  - hmac-sha2-256-etm@openssh.com
+  - hmac-sha2-512
+  - hmac-sha2-256
+# Post-quantum hybrid first (CIS 5.1.14).
+baseline_ssh_kex:
+  - mlkem768x25519-sha256
+  - sntrup761x25519-sha512
+  - sntrup761x25519-sha512@openssh.com
+  - curve25519-sha256
+  - curve25519-sha256@libssh.org
+  - ecdh-sha2-nistp521
+  - ecdh-sha2-nistp384
+  - ecdh-sha2-nistp256
+  - diffie-hellman-group-exchange-sha256
+  - diffie-hellman-group16-sha512
+  - diffie-hellman-group18-sha512
+
+baseline_password_max_days: 365
+baseline_password_min_days: 1
+baseline_password_warn_days: 7
+
+# Where the preflight report is written on the controller.
+baseline_report_dir: "{{ playbook_dir }}/../reports"

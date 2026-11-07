@@ -6,7 +6,7 @@ exclude_paths:
   - .galaxy/
   - .github/
   - reports/
-  - inventory/group_vars/all/vault.example.yml
+  - inventory/examples/vault.yml
 
 # Example/placeholder inventory is linted like any other file.
 kinds:

@@ -1,0 +1,12 @@
+# {{ ansible_managed }}
+# Baseline SSH policy for the Tactical RMM host (role baseline).
+PermitRootLogin no
+PubkeyAuthentication yes
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+AuthenticationMethods publickey
+PermitEmptyPasswords no
+AllowGroups {{ baseline_ssh_allow_group }}
+Ciphers {{ baseline_ssh_ciphers | join(',') }}
+MACs {{ baseline_ssh_macs | join(',') }}
+KexAlgorithms {{ baseline_ssh_kex | join(',') }}

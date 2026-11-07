@@ -1,0 +1,33 @@
+---
+- name: Users | SSH login group
+  ansible.builtin.group:
+    name: "{{ baseline_ssh_allow_group }}"
+    system: true
+    state: present
+
+- name: Users | Administrators
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    comment: "{{ item.comment | default(omit) }}"
+    shell: /bin/bash
+    groups: [sudo, "{{ baseline_ssh_allow_group }}"]
+    append: true
+    password: "{{ item.password_hash }}"
+    update_password: always
+    password_expire_max: "{{ baseline_password_max_days }}"
+    password_expire_min: "{{ baseline_password_min_days }}"
+    password_expire_warn: "{{ baseline_password_warn_days }}"
+  loop: "{{ admin_users }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+
+- name: Users | Authorised SSH keys (exclusive)
+  ansible.posix.authorized_key:
+    user: "{{ item.name }}"
+    key: "{{ item.ssh_keys | join('\n') }}"
+    exclusive: true
+    state: present
+  loop: "{{ admin_users }}"
+  loop_control:
+    label: "{{ item.name }}"

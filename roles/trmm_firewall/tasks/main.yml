@@ -1,0 +1,80 @@
+---
+# Allow rules are added BEFORE the firewall is enabled so the Ansible SSH
+# session survives. The preflight in role baseline has already proved that
+# this session's source address is inside admin_ssh_cidrs.
+
+- name: Firewall | ufw installed (CIS 4.1.1)
+  ansible.builtin.apt:
+    name: ufw
+    state: present
+
+- name: Firewall | IPv6 rules enabled
+  ansible.builtin.lineinfile:
+    path: /etc/default/ufw
+    regexp: '^IPV6='
+    line: IPV6=yes
+
+- name: Firewall | Allow SSH from admin networks only
+  community.general.ufw:
+    rule: allow
+    proto: tcp
+    from_ip: "{{ item }}"
+    to_port: "{{ trmm_firewall_ssh_port | string }}"
+    comment: "SSH admin"
+  loop: "{{ admin_ssh_cidrs }}"
+
+- name: Firewall | Allow HTTPS for agents and technicians
+  community.general.ufw:
+    rule: allow
+    proto: tcp
+    from_ip: "{{ item }}"
+    to_port: "{{ trmm_firewall_https_port | string }}"
+    comment: "TRMM web/API/Mesh/NATS-ws"
+  loop: "{{ trmm_https_allowed_cidrs }}"
+
+- name: Firewall | Allow legacy NATS standard port (disabled by default)
+  community.general.ufw:
+    rule: allow
+    proto: tcp
+    from_ip: "{{ item }}"
+    to_port: "4222"
+    comment: "TRMM NATS standard (legacy)"
+  loop: "{{ trmm_firewall_nats_allowed_cidrs }}"
+  when: trmm_firewall_allow_nats_standard
+
+- name: Firewall | Default incoming deny (CIS 4.1.3)
+  community.general.ufw:
+    default: deny
+    direction: incoming
+
+- name: Firewall | Default routed deny (CIS 4.1.5)
+  community.general.ufw:
+    default: deny
+    direction: routed
+
+- name: Firewall | Default outgoing policy
+  community.general.ufw:
+    default: "{{ trmm_firewall_outgoing_policy }}"
+    direction: outgoing
+
+- name: Firewall | Logging
+  community.general.ufw:
+    logging: "{{ trmm_firewall_logging }}"
+
+- name: Firewall | Enable ufw (CIS 4.1.2)
+  community.general.ufw:
+    state: enabled
+
+- name: Firewall | ufw service enabled and running (CIS 4.1.2)
+  ansible.builtin.systemd_service:
+    name: ufw.service
+    enabled: true
+    masked: false
+    state: started
+
+- name: Firewall | No separate nftables ruleset service (single firewall manager)
+  ansible.builtin.systemd_service:
+    name: nftables.service
+    enabled: false
+    state: stopped
+  when: "'nftables.service' in ansible_facts['services'] | default({})"

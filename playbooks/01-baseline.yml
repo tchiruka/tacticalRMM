@@ -1,0 +1,10 @@
+---
+# Phase 1: preflight gates, OS baseline and default-deny firewall.
+# Safe to re-run; changes nothing that TRMM depends on.
+- name: Baseline the Tactical RMM host
+  hosts: trmm_servers
+  become: true
+  gather_facts: true
+  roles:
+    - role: baseline
+    - role: trmm_firewall
