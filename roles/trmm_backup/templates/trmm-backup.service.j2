@@ -1,0 +1,18 @@
+# {{ ansible_managed }}
+[Unit]
+Description=Tactical RMM backup (latest official backup.sh, age-encrypted, shipped off-host)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User={{ trmm_user }}
+Group={{ trmm_user }}
+WorkingDirectory={{ trmm_backup_home }}
+Environment=LANG=C.UTF-8 HOME={{ trmm_backup_home }}
+ExecStart=/usr/local/sbin/trmm-backup
+TimeoutStartSec={{ trmm_backup_timeout }}
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+# NoNewPrivileges is deliberately NOT set: backup.sh calls sudo.

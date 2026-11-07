@@ -1,0 +1,36 @@
+---
+# docs.tacticalrmm.com/install_server: prepare as root, install as a
+# dedicated non-root user. Deviation from the docs (documented in
+# docs/cis-exceptions.md, EXC-02): the account is NOT in the `sudo` group and
+# has a locked password; it gets NOPASSWD sudo through a drop-in instead,
+# which TRMM requires for unattended backups ("Passwordless sudo is
+# required") and which avoids a usable password on the service account.
+# It cannot log in over SSH (not in the AllowGroups group).
+
+- name: User | Service account
+  ansible.builtin.user:
+    name: "{{ trmm_user }}"
+    comment: "Tactical RMM service account"
+    shell: /bin/bash
+    create_home: true
+    password: "!"
+    update_password: always
+
+- name: User | Home directory permissions (CIS 7.2.9)
+  ansible.builtin.file:
+    path: "{{ trmm_server_home }}"
+    state: directory
+    owner: "{{ trmm_user }}"
+    group: "{{ trmm_user }}"
+    mode: "0750"
+
+- name: User | Passwordless sudo for the TRMM service account
+  ansible.builtin.copy:
+    dest: "/etc/sudoers.d/50-trmm-{{ trmm_user }}"
+    content: |
+      # Managed by Ansible (role trmm_server). See docs/cis-exceptions.md EXC-02.
+      {{ trmm_user }} ALL=(ALL:ALL) NOPASSWD: ALL
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s

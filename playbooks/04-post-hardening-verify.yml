@@ -1,0 +1,199 @@
+---
+# Phase 4: prove TRMM still works after hardening and that the key controls
+# are in force. Read-only (safe in --check and in production at any time).
+# Writes reports/<host>-verify.json on the controller.
+
+- name: Verify Tactical RMM and hardening
+  hosts: trmm_servers
+  become: true
+  gather_facts: true
+  vars:
+    _trmm_units: [nginx, rmm, daphne, celery, celerybeat, nats, nats-api, meshcentral, postgresql, redis-server]
+    _trmm_nonroot_units: [rmm, daphne, celery, celerybeat, nats, nats-api, meshcentral]
+    _report_dir: "{{ playbook_dir }}/../reports"
+  tasks:
+    - name: Read TRMM service status
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+      loop: "{{ _trmm_units }}"
+      register: _v_units
+
+    - name: TRMM services are active, and app services run as the service account (never root)
+      vars:
+        _status: "{{ dict(_v_units.results | map(attribute='item') | zip(_v_units.results | map(attribute='status'))) }}"
+      ansible.builtin.assert:
+        that:
+          - _trmm_units | reject('in', _status) | list | length == 0
+          - _trmm_units | map('extract', _status) | map(attribute='ActiveState') | reject('equalto', 'active') | list | length == 0
+          - _trmm_nonroot_units | map('extract', _status) | map(attribute='User') | reject('equalto', trmm_user) | list | length == 0
+        fail_msg: >-
+          {{ _trmm_units | map('extract', _status) | map(attribute='Id') | zip(
+             _trmm_units | map('extract', _status) | map(attribute='ActiveState'),
+             _trmm_units | map('extract', _status) | map(attribute='User', default='')) | list }}
+        quiet: true
+
+    - name: HTTPS answers on all three FQDNs (via local nginx)
+      ansible.builtin.command:
+        argv: [curl, -s, -o, /dev/null, -w, "%{http_code}", --max-time, "15",
+               --resolve, "{{ item }}:443:127.0.0.1", "https://{{ item }}/"]
+      changed_when: false
+      check_mode: false
+      loop: ["{{ trmm_api_fqdn }}", "{{ trmm_frontend_fqdn }}", "{{ trmm_mesh_fqdn }}"]
+      register: _v_https
+      failed_when: _v_https.stdout == '000' or (_v_https.stdout | int) >= 500
+
+    - name: List listening TCP sockets
+      ansible.builtin.command: ss -Hltn
+      changed_when: false
+      check_mode: false
+      register: _v_ss
+
+    - name: NATS (4222) and its websocket (9235) are bound to loopback only
+      vars:
+        _nats: "{{ _v_ss.stdout_lines | map('split') | map(attribute=3) | select('search', ':(4222|9235)$') | list }}"
+      ansible.builtin.assert:
+        that:
+          - _nats | length > 0
+          - _nats | reject('match', '^(127\.0\.0\.1|\[::1\]):') | list | length == 0
+        fail_msg: "NATS listeners not loopback-only: {{ _nats }}"
+        quiet: true
+
+    - name: Firewall is active with default-deny inbound
+      ansible.builtin.command: ufw status verbose
+      changed_when: false
+      check_mode: false
+      register: _v_ufw
+      failed_when: >-
+        'Status: active' not in _v_ufw.stdout
+        or 'deny (incoming)' not in _v_ufw.stdout
+        or 'deny (routed)' not in _v_ufw.stdout
+
+    - name: Only SSH and HTTPS are allowed inbound
+      vars:
+        _allowed_ports: "{{ ['22/tcp', '443/tcp'] + (['4222/tcp'] if trmm_firewall_allow_nats_standard | default(false) else []) }}"
+        _rule_ports: "{{ _v_ufw.stdout_lines | select('search', 'ALLOW IN') | map('split') | map('first') | unique | list }}"
+      ansible.builtin.assert:
+        that: _rule_ports | difference(_allowed_ports) | length == 0
+        fail_msg: "Unexpected inbound rules: {{ _rule_ports | difference(_allowed_ports) }}"
+        quiet: true
+
+    - name: Every superuser has TOTP configured
+      ansible.builtin.command:
+        argv:
+          - /rmm/api/env/bin/python
+          - manage.py
+          - shell
+          - -c
+          - |
+            from django.db.models import Q
+            from accounts.models import User
+            no_totp = Q(totp_key__isnull=True) | Q(totp_key="")
+            print(User.objects.filter(is_superuser=True).filter(no_totp).count())
+        chdir: /rmm/api/tacticalrmm
+      become: true
+      become_user: "{{ trmm_user }}"
+      changed_when: false
+      check_mode: false
+      register: _v_totp
+      failed_when: _v_totp.stdout_lines | last | int != 0
+
+    - name: Find a collected static file
+      ansible.builtin.command: find /rmm/api/tacticalrmm/static -type f -print -quit
+      changed_when: false
+      check_mode: false
+      register: _v_static
+
+    - name: Static files are readable by nginx (www-data) - umask 027 regression guard
+      ansible.builtin.command: "runuser -u www-data -- test -r {{ _v_static.stdout }}"
+      changed_when: false
+      check_mode: false
+      when: _v_static.stdout | length > 0
+
+    - name: Effective sshd configuration
+      ansible.builtin.command: sshd -T
+      changed_when: false
+      check_mode: false
+      register: _v_sshd
+
+    - name: SSH is key-only, no root, modern crypto
+      vars:
+        _cfg: "{{ dict(_v_sshd.stdout_lines | map('split', ' ', 1) | select('length', '==', 2) | list) }}"
+      ansible.builtin.assert:
+        that:
+          - _cfg.permitrootlogin == 'no'
+          - _cfg.passwordauthentication == 'no'
+          - _cfg.kbdinteractiveauthentication == 'no'
+          - _cfg.pubkeyauthentication == 'yes'
+          - "'mlkem768x25519-sha256' in _cfg.kexalgorithms.split(',')"
+          - _cfg.macs.split(',') | select('search', 'sha1|md5|umac-64') | list | length == 0
+          - _cfg.ciphers.split(',') | select('search', 'cbc|3des|arcfour') | list | length == 0
+          - (_cfg.clientaliveinterval | int) > 0
+          - _cfg.banner != 'none'
+        fail_msg: "sshd -T does not match policy"
+        quiet: true
+
+    - name: /tmp is mounted nodev,nosuid,noexec
+      ansible.builtin.command: findmnt -kn -o OPTIONS /tmp
+      changed_when: false
+      check_mode: false
+      register: _v_tmp
+      failed_when: >-
+        _v_tmp.rc != 0 or
+        (['nodev', 'nosuid', 'noexec'] | difference(_v_tmp.stdout.split(',')) | length > 0)
+
+    - name: AppArmor enabled with no profiles in complain mode
+      ansible.builtin.command: aa-status --json
+      changed_when: false
+      check_mode: false
+      register: _v_aa
+      failed_when: >-
+        _v_aa.rc != 0 or
+        ((_v_aa.stdout | from_json).profiles | dict2items | selectattr('value', 'equalto', 'complain') | list | length > 0)
+
+    - name: Auditd is running with an immutable rule set
+      ansible.builtin.command: auditctl -s
+      changed_when: false
+      check_mode: false
+      register: _v_audit
+      failed_when: "'enabled 2' not in _v_audit.stdout"
+
+    - name: In-place release upgrades are blocked
+      ansible.builtin.command: grep -qx 'Prompt=never' /etc/update-manager/release-upgrades
+      changed_when: false
+      check_mode: false
+
+    - name: Timers are active (backup, health check, certbot)
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+      register: _v_timers
+      failed_when: _v_timers.status.ActiveState != 'active'
+      loop: "{{ ['trmm-healthcheck.timer']
+                + (['trmm-backup.timer'] if trmm_backup_enabled | bool else [])
+                + (['certbot.timer'] if trmm_tls_mode == 'letsencrypt_dns01' else []) }}"
+
+    - name: Health check result
+      ansible.builtin.command: /usr/local/sbin/trmm-healthcheck
+      changed_when: false
+      check_mode: false
+      register: _v_health
+      failed_when: _v_health.rc >= 2
+
+    - name: Write verification report
+      ansible.builtin.copy:
+        dest: "{{ _report_dir }}/{{ inventory_hostname }}-verify.json"
+        mode: "0640"
+        content: >-
+          {{ {
+            'host': inventory_hostname,
+            'time': now(utc=true).isoformat(),
+            'services': dict(_v_units.results | map(attribute='item') | zip(_v_units.results | map(attribute='status.ActiveState'))),
+            'https': dict(_v_https.results | map(attribute='item') | zip(_v_https.results | map(attribute='stdout'))),
+            'listening': _v_ss.stdout_lines | map('split') | map(attribute=3) | list,
+            'ufw': _v_ufw.stdout_lines,
+            'tmp_options': _v_tmp.stdout,
+            'audit_status': _v_audit.stdout_lines,
+            'healthcheck': _v_health.stdout
+          } | to_nice_json }}
+      delegate_to: localhost
+      become: false
+      check_mode: false

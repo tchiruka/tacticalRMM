@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# {{ ansible_managed }}
+# certbot deploy hook: copy the renewed certificate to the stable paths
+# configured in TRMM (CERT_FILE/KEY_FILE) and restart the services listed in
+# the TRMM docs ("sudo systemctl restart nginx meshcentral rmm daphne").
+set -euo pipefail
+umask 077
+
+src="${RENEWED_LINEAGE:?RENEWED_LINEAGE not set}"
+dst="{{ trmm_server_cert_dir }}"
+
+install -o {{ trmm_user }} -g {{ trmm_user }} -m 0644 "${src}/fullchain.pem" "${dst}/fullchain.pem.new"
+install -o {{ trmm_user }} -g {{ trmm_user }} -m 0600 "${src}/privkey.pem" "${dst}/privkey.pem.new"
+mv -f "${dst}/fullchain.pem.new" "${dst}/fullchain.pem"
+mv -f "${dst}/privkey.pem.new" "${dst}/privkey.pem"
+
+for svc in {{ trmm_server_cert_reload_services | join(' ') }}; do
+  if systemctl is-active --quiet "${svc}"; then
+    systemctl restart "${svc}"
+  fi
+done
+
+expiry="$(openssl x509 -enddate -noout -in "${dst}/fullchain.pem" | cut -d= -f2)"
+logger -t trmm-cert -p auth.notice "Deployed certificate from ${src}; expires ${expiry}"

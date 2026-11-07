@@ -1,0 +1,7 @@
+# {{ ansible_managed }}
+# Tactical RMM log files -> syslog (facility local6), forwarded to the SIEM
+# by /etc/rsyslog.d/60-rsyslog.conf (CIS 6.1.2.5).
+module(load="imfile")
+{% for f in trmm_server_log_files %}
+input(type="imfile" File="{{ f.path }}" Tag="{{ f.tag }}:" Facility="local6" Severity="info" freshStartTail="on")
+{% endfor %}

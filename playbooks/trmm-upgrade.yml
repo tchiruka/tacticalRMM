@@ -1,0 +1,129 @@
+---
+# Tactical RMM upgrade with the official update.sh (docs.tacticalrmm.com/update_server).
+# Never scheduled: the docs say not to automate update.sh with cron, so this
+# runs only when an operator explicitly confirms, after a snapshot + backup.
+#
+#   ansible-playbook playbooks/trmm-upgrade.yml \
+#     -e trmm_upgrade_confirm=true -e trmm_upgrade_snapshot_taken=true
+#
+# Afterwards: update trmm_version/trmm_install_script_* in group_vars and
+# CHANGELOG.md, then run 04-post-hardening-verify.yml (imported below).
+
+- name: Upgrade Tactical RMM
+  hosts: trmm_servers
+  become: true
+  gather_facts: true
+  serial: 1
+  vars:
+    trmm_home: "/home/{{ trmm_user }}"
+    _upgrade_tmpdir: "/home/{{ trmm_user }}/.trmm-tmp"
+  tasks:
+    - name: Require explicit confirmation and a pre-change VM snapshot
+      ansible.builtin.assert:
+        that:
+          - trmm_upgrade_confirm | default(false) | bool
+          - trmm_upgrade_snapshot_taken | default(false) | bool
+        fail_msg: >-
+          Take a hypervisor snapshot first (runbook §Upgrade), read the release notes
+          between the installed and latest version, then re-run with
+          -e trmm_upgrade_confirm=true -e trmm_upgrade_snapshot_taken=true
+        quiet: true
+
+    - name: Read installed version
+      ansible.builtin.command: grep -m1 '^TRMM_VERSION' /rmm/api/tacticalrmm/tacticalrmm/settings.py
+      changed_when: false
+      register: _installed
+
+    - name: Read latest upstream version
+      ansible.builtin.uri:
+        url: https://raw.githubusercontent.com/amidaware/tacticalrmm/master/api/tacticalrmm/tacticalrmm/settings.py
+        return_content: true
+      register: _upstream
+
+    - name: Compare versions
+      ansible.builtin.set_fact:
+        _from: "{{ _installed.stdout | regex_search('\"([^\"]+)\"', '\\1') | first }}"
+        _to: "{{ _upstream.content | regex_search('(?m)^TRMM_VERSION = \"([^\"]+)\"', '\\1') | first }}"
+
+    - name: Nothing to do
+      ansible.builtin.meta: end_host
+      when: _from == _to
+
+    - name: Show upgrade path
+      ansible.builtin.debug:
+        msg: "Upgrading TRMM {{ _from }} -> {{ _to }}. Release notes: https://github.com/amidaware/tacticalrmm/releases"
+
+    - name: Pre-upgrade backup (latest official backup.sh)
+      ansible.builtin.systemd_service:
+        name: trmm-backup.service
+        state: started
+      async: 14400
+      poll: 30
+
+    - name: Verify the pre-upgrade backup succeeded in the last hour
+      ansible.builtin.slurp:
+        src: /var/lib/trmm-backup/last_success
+      register: _last_backup
+      failed_when: (now().timestamp() | int) - (_last_backup.content | b64decode | trim | int) > 3600
+
+    - name: Download the latest update.sh (wget -N equivalent)
+      ansible.builtin.get_url:
+        url: https://raw.githubusercontent.com/amidaware/tacticalrmm/master/update.sh
+        dest: "{{ trmm_home }}/update.sh"
+        force: true
+        owner: "{{ trmm_user }}"
+        group: "{{ trmm_user }}"
+        mode: "0750"
+
+    - name: Private temp directory on an exec-capable filesystem
+      # /tmp is mounted noexec (CIS 1.1.2.1.4). TMPDIR points build steps
+      # (pip, npm, mktemp) at the service account's home instead, so the
+      # hardened mount options stay in place during the upgrade.
+      ansible.builtin.file:
+        path: "{{ _upgrade_tmpdir }}"
+        state: directory
+        owner: "{{ trmm_user }}"
+        group: "{{ trmm_user }}"
+        mode: "0700"
+
+    - name: Run update.sh as the install user (umask 022 so nginx can read static files)
+      ansible.builtin.command:
+        argv: [bash, -c, "umask 0022 && ./update.sh </dev/null"]
+        chdir: "{{ trmm_home }}"
+      become: true
+      become_user: "{{ trmm_user }}"
+      environment:
+        LANG: C.UTF-8
+        HOME: "{{ trmm_home }}"
+        TMPDIR: "{{ _upgrade_tmpdir }}"
+      async: 7200
+      poll: 30
+      register: _update
+      changed_when: true
+
+    - name: Keep the update log (root only)
+      ansible.builtin.copy:
+        dest: "/var/log/trmm-update-{{ _from }}-to-{{ _to }}.log"
+        content: "{{ _update.stdout | default('') }}\n{{ _update.stderr | default('') }}\n"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Clean up temp directory
+      ansible.builtin.file:
+        path: "{{ _upgrade_tmpdir }}"
+        state: absent
+
+    - name: Read new version
+      ansible.builtin.command: grep -m1 '^TRMM_VERSION' /rmm/api/tacticalrmm/tacticalrmm/settings.py
+      changed_when: false
+      register: _after
+
+    - name: Assert the upgrade reached the upstream version
+      ansible.builtin.assert:
+        that: (_after.stdout | regex_search('\"([^\"]+)\"', '\\1') | first) == _to
+        fail_msg: "Upgrade did not complete - see /var/log/trmm-update-{{ _from }}-to-{{ _to }}.log; rollback per runbook."
+        success_msg: "Upgraded to {{ _to }}. Now update trmm_version and the installer pin in group_vars/all/main.yml."
+
+- name: Post-upgrade verification
+  ansible.builtin.import_playbook: 04-post-hardening-verify.yml

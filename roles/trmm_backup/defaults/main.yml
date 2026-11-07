@@ -1,0 +1,11 @@
+---
+trmm_backup_home: "/home/{{ trmm_user }}"
+trmm_backup_script_url: https://raw.githubusercontent.com/amidaware/tacticalrmm/master/backup.sh
+trmm_backup_local_dir: /rmmbackups
+trmm_backup_config_dir: /etc/trmm-backup
+trmm_backup_state_dir: /var/lib/trmm-backup
+trmm_backup_nfs_mountpoint: /mnt/trmm-backups
+trmm_backup_rclone_remote: trmm
+# Off-host path prefix, one folder per host.
+trmm_backup_remote_prefix: "{{ inventory_hostname }}"
+trmm_backup_timeout: 4h

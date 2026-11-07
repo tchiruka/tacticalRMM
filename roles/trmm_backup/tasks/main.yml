@@ -1,0 +1,142 @@
+---
+# The official backup.sh runs as the install user and needs passwordless
+# sudo (granted by role trmm_server). It does not update itself, so the
+# wrapper downloads the latest version from master before EVERY run.
+# The job is a systemd timer, not `backup.sh --schedule` (user crontab),
+# because CIS 2.4.1.9 restricts crontab to root via /etc/cron.allow.
+
+- name: Backup | Validate destination
+  ansible.builtin.assert:
+    that:
+      - trmm_backup_destination in ['s3', 'rsync', 'nfs']
+      - trmm_backup_age_recipients | length > 0
+      - trmm_backup_age_recipients | select('match', '^age1[0-9a-z]{58}$') | list | length == trmm_backup_age_recipients | length
+    fail_msg: "trmm_backup_destination must be s3|rsync|nfs and trmm_backup_age_recipients valid age public keys."
+    quiet: true
+
+- name: Backup | Packages
+  ansible.builtin.apt:
+    name: "{{ ['age', 'curl'] + _dest_pkgs[trmm_backup_destination] }}"
+    state: present
+  vars:
+    _dest_pkgs:
+      s3: [rclone]
+      rsync: [rsync, openssh-client]
+      nfs: [nfs-common]
+
+- name: Backup | Config directory
+  ansible.builtin.file:
+    path: "{{ trmm_backup_config_dir }}"
+    state: directory
+    owner: root
+    group: "{{ trmm_user }}"
+    mode: "0750"
+
+- name: Backup | State directory (readable by the health check)
+  ansible.builtin.file:
+    path: "{{ trmm_backup_state_dir }}"
+    state: directory
+    owner: "{{ trmm_user }}"
+    group: "{{ trmm_user }}"
+    mode: "0755"
+
+- name: Backup | age recipients (public keys only)
+  ansible.builtin.copy:
+    dest: "{{ trmm_backup_config_dir }}/age-recipients.txt"
+    content: "{{ trmm_backup_age_recipients | join('\n') }}\n"
+    owner: root
+    group: "{{ trmm_user }}"
+    mode: "0640"
+
+- name: Backup | rclone S3 configuration
+  ansible.builtin.copy:
+    dest: "{{ trmm_backup_config_dir }}/rclone.conf"
+    content: |
+      [{{ trmm_backup_rclone_remote }}]
+      type = s3
+      provider = Other
+      access_key_id = {{ vault_trmm_backup_s3_access_key }}
+      secret_access_key = {{ vault_trmm_backup_s3_secret_key }}
+      endpoint = {{ trmm_backup_s3_endpoint }}
+      region = {{ trmm_backup_s3_region }}
+    owner: root
+    group: "{{ trmm_user }}"
+    mode: "0640"
+  no_log: true
+  when: trmm_backup_destination == 's3'
+
+- name: Backup | rsync SSH key and pinned host key
+  when: trmm_backup_destination == 'rsync'
+  block:
+    - name: Backup | rsync private key
+      ansible.builtin.copy:
+        dest: "{{ trmm_backup_config_dir }}/id_backup"
+        content: "{{ vault_trmm_backup_rsync_ssh_key }}\n"
+        owner: "{{ trmm_user }}"
+        group: "{{ trmm_user }}"
+        mode: "0600"
+      no_log: true
+
+    - name: Backup | rsync known_hosts
+      ansible.builtin.copy:
+        dest: "{{ trmm_backup_config_dir }}/known_hosts"
+        content: "{{ vault_trmm_backup_rsync_known_hosts }}\n"
+        owner: root
+        group: "{{ trmm_user }}"
+        mode: "0640"
+
+- name: Backup | NFS mount
+  ansible.posix.mount:
+    path: "{{ trmm_backup_nfs_mountpoint }}"
+    src: "{{ trmm_backup_nfs_export }}"
+    fstype: nfs4
+    opts: "nfsvers=4.2,_netdev,nosuid,nodev,noexec,hard,timeo=600"
+    state: mounted
+  when: trmm_backup_destination == 'nfs' and not ansible_check_mode
+
+- name: Backup | Wrapper script
+  ansible.builtin.template:
+    src: trmm-backup.sh.j2
+    dest: /usr/local/sbin/trmm-backup
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Backup | systemd service
+  ansible.builtin.template:
+    src: trmm-backup.service.j2
+    dest: /etc/systemd/system/trmm-backup.service
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Backup | systemd timer
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/trmm-backup.timer
+    content: |
+      # Managed by Ansible (role trmm_backup)
+      [Unit]
+      Description=Nightly Tactical RMM backup
+
+      [Timer]
+      OnCalendar={{ trmm_backup_schedule }}
+      RandomizedDelaySec=15min
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Backup | Flush handlers
+  ansible.builtin.meta: flush_handlers
+
+- name: Backup | Timer enabled
+  ansible.builtin.systemd_service:
+    name: trmm-backup.timer
+    enabled: true
+    state: started
+  when: not ansible_check_mode

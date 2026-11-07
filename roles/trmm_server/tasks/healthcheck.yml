@@ -1,0 +1,72 @@
+---
+# Nagios-compatible check (exit 0/1/2/3, one-line status + perfdata) that can
+# also emit Prometheus textfile metrics. A systemd timer runs it every five
+# minutes and logs WARNING/CRITICAL to syslog (forwarded to the SIEM).
+
+- name: Health | Check script
+  ansible.builtin.template:
+    src: trmm-healthcheck.sh.j2
+    dest: /usr/local/sbin/trmm-healthcheck
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Health | systemd service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/trmm-healthcheck.service
+    content: |
+      # Managed by Ansible (role trmm_server)
+      [Unit]
+      Description=Tactical RMM health check
+      After=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/usr/local/sbin/trmm-healthcheck --syslog --prometheus
+      # Exit 1/2 are reported states, not unit failures.
+      SuccessExitStatus=1 2
+      ProtectSystem=strict
+      ReadWritePaths={{ trmm_healthcheck_prometheus_textfile_dir }} /run
+      PrivateTmp=true
+      NoNewPrivileges=true
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Health | systemd timer
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/trmm-healthcheck.timer
+    content: |
+      # Managed by Ansible (role trmm_server)
+      [Unit]
+      Description=Run the Tactical RMM health check every 5 minutes
+
+      [Timer]
+      OnBootSec=5min
+      OnUnitActiveSec=5min
+
+      [Install]
+      WantedBy=timers.target
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Reload systemd
+
+- name: Health | Prometheus textfile directory exists (harmless without node_exporter)
+  ansible.builtin.file:
+    path: "{{ trmm_healthcheck_prometheus_textfile_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Health | Flush handlers before enabling the timer
+  ansible.builtin.meta: flush_handlers
+
+- name: Health | Timer enabled
+  ansible.builtin.systemd_service:
+    name: trmm-healthcheck.timer
+    enabled: true
+    state: started
+  when: not ansible_check_mode

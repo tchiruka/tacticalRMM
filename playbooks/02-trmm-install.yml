@@ -1,0 +1,12 @@
+---
+# Phase 2: install Tactical RMM (before hardening, as the TRMM installer
+# compiles Python and needs exec on its build/temp locations), then
+# configure SMTP, health checks, log inputs and nightly backups.
+- name: Install and configure Tactical RMM
+  hosts: trmm_servers
+  become: true
+  gather_facts: true
+  roles:
+    - role: trmm_server
+    - role: trmm_backup
+      when: trmm_backup_enabled | bool

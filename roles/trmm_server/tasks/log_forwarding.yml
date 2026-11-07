@@ -1,0 +1,28 @@
+---
+# Feeds TRMM application/nginx logs into rsyslog with recognisable tags.
+# The forwarding action itself (*.* -> SIEM) is CIS 6.1.2.5, applied by the
+# CIS role; auditd -> syslog is configured in role cis_level1.
+
+- name: SIEM | AppArmor - allow rsyslogd to read the TRMM log directory only
+  ansible.builtin.copy:
+    dest: /etc/apparmor.d/rsyslog.d/50-trmm
+    content: |
+      # Managed by Ansible (role trmm_server). Read-only access for imfile.
+      {{ trmm_server_api_dir }}/tacticalrmm/private/log/ r,
+      {{ trmm_server_api_dir }}/tacticalrmm/private/log/*.log r,
+    owner: root
+    group: root
+    mode: "0644"
+  notify:
+    - Reload rsyslogd AppArmor profile
+    - Restart rsyslog
+
+- name: SIEM | rsyslog imfile inputs for TRMM logs
+  ansible.builtin.template:
+    src: rsyslog-40-trmm.conf.j2
+    dest: /etc/rsyslog.d/40-trmm.conf
+    owner: root
+    group: root
+    mode: "0640"
+    validate: rsyslogd -N1 -f %s
+  notify: Restart rsyslog

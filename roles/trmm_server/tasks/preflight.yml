@@ -1,0 +1,63 @@
+---
+# The official installer clones `master` and self-replaces when upstream
+# SCRIPT_VERSION changes, so a pin can only be enforced by refusing to run
+# when upstream has moved. Nothing here modifies or bypasses the installer
+# (including its OS check).
+
+- name: Preflight | Controller vault password file is available for generated credentials
+  ansible.builtin.stat:
+    path: "{{ trmm_server_credentials_vault_password_file }}"
+  delegate_to: localhost
+  become: false
+  register: trmm_server_vault_pass
+  when: not trmm_server_installed
+
+- name: Preflight | Assert credentials can be vault-encrypted on the controller
+  ansible.builtin.assert:
+    that:
+      - trmm_server_credentials_vault_password_file | length > 0
+      - trmm_server_vault_pass.stat.exists
+    fail_msg: >-
+      Set ANSIBLE_VAULT_PASSWORD_FILE (or trmm_server_credentials_vault_password_file) on the
+      controller. Generated credentials are only ever written vault-encrypted.
+    quiet: true
+  when: not trmm_server_installed
+
+- name: Preflight | Read upstream settings.py (master)
+  ansible.builtin.uri:
+    url: "{{ trmm_server_settings_url }}"
+    return_content: true
+  register: trmm_server_upstream_settings
+  check_mode: false
+  when: not trmm_server_installed
+
+- name: Preflight | Assert upstream TRMM version equals the pinned version
+  vars:
+    _upstream_version: "{{ trmm_server_upstream_settings.content | regex_search('(?m)^TRMM_VERSION = \"([^\"]+)\"', '\\1') | first }}"
+  ansible.builtin.assert:
+    that:
+      - _upstream_version == trmm_version
+    fail_msg: >-
+      Upstream master is TRMM {{ _upstream_version }} but this repo pins {{ trmm_version }}.
+      Review the release notes, then update trmm_version / trmm_install_script_* in
+      inventory/group_vars/all/main.yml and record it in CHANGELOG.md.
+    quiet: true
+  when: not trmm_server_installed
+
+- name: Preflight | Download install.sh and verify its pinned checksum
+  ansible.builtin.get_url:
+    url: "{{ trmm_server_install_script_url }}"
+    dest: "{{ trmm_server_home }}/install.sh"
+    checksum: "sha256:{{ trmm_install_script_sha256 }}"
+    owner: "{{ trmm_user }}"
+    group: "{{ trmm_user }}"
+    mode: "0750"
+  when: not trmm_server_installed
+
+- name: Preflight | Read installer OS gate (informational, not modified)
+  ansible.builtin.command: grep -F 'Only Debian 13 and Ubuntu 26.04 are supported' {{ trmm_server_home }}/install.sh
+  changed_when: false
+  check_mode: false
+  register: trmm_server_os_gate
+  failed_when: trmm_server_os_gate.rc != 0
+  when: not trmm_server_installed and not ansible_check_mode
