@@ -1,0 +1,21 @@
+---
+- name: CIS | Pre-checks
+  ansible.builtin.import_tasks: precheck.yml
+  tags: [cis, precheck]
+
+- name: CIS | Apply CIS Ubuntu 26.04 v1.0.0 via ansible-lockdown UBUNTU26-CIS
+  ansible.builtin.include_role:
+    name: ubuntu26_cis
+  tags: [cis, cis_role]
+
+- name: CIS | AppArmor (narrow form of 1.3.1.3)
+  ansible.builtin.import_tasks: apparmor.yml
+  tags: [cis, apparmor]
+
+- name: CIS | auditd log retention and forwarding
+  ansible.builtin.import_tasks: auditd.yml
+  tags: [cis, auditd]
+
+- name: CIS | Reboot if required and verify TRMM came back
+  ansible.builtin.import_tasks: reboot.yml
+  tags: [cis, reboot]

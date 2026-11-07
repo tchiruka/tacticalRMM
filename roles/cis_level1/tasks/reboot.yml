@@ -1,0 +1,28 @@
+---
+# The vendor role runs with skip_reboot: true and sets change_requires_reboot
+# when e.g. auditd kernel parameters (6.2.1.3/6.2.1.4) or mount options change.
+
+- name: Reboot | Reboot when the CIS role requires it
+  ansible.builtin.reboot:
+    msg: "Reboot to activate CIS hardening (Ansible)"
+    reboot_timeout: "{{ cis_level1_reboot_timeout }}"
+  when:
+    - change_requires_reboot | default(false) | bool
+    - cis_level1_reboot_allowed | bool
+
+- name: Reboot | Remind operator when a reboot is required but not allowed
+  ansible.builtin.debug:
+    msg: "A reboot is required to complete hardening. Schedule one, then run 04-post-hardening-verify.yml."
+  when:
+    - change_requires_reboot | default(false) | bool
+    - not (cis_level1_reboot_allowed | bool)
+
+- name: Reboot | Wait for TRMM services to be active
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+  register: cis_level1_unit
+  until: cis_level1_unit.status.ActiveState == 'active'
+  retries: 30
+  delay: 10
+  loop: "{{ cis_level1_trmm_units }}"
+  when: cis_level1_trmm.stat.exists

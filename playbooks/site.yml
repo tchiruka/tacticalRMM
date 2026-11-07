@@ -1,0 +1,25 @@
+---
+# Full build: baseline -> TRMM install -> audit (before) -> CIS L1 ->
+# verify -> audit (after). Every phase can also be run on its own.
+# Skip the two audits with -e site_run_audits=false.
+- name: Phase 1 - baseline
+  ansible.builtin.import_playbook: 01-baseline.yml
+
+- name: Phase 2 - Tactical RMM
+  ansible.builtin.import_playbook: 02-trmm-install.yml
+
+- name: Compliance audit before hardening
+  ansible.builtin.import_playbook: audit.yml
+  vars:
+    cis_audit_phase: before
+
+- name: Phase 3 - CIS Level 1
+  ansible.builtin.import_playbook: 03-cis-level1.yml
+
+- name: Phase 4 - verification
+  ansible.builtin.import_playbook: 04-post-hardening-verify.yml
+
+- name: Compliance audit after hardening
+  ansible.builtin.import_playbook: audit.yml
+  vars:
+    cis_audit_phase: after

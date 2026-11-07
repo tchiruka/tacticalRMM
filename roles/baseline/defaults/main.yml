@@ -28,34 +28,10 @@ baseline_conflicting_time_services:
   - ntpsec.service
   - ntpd-rs.service
 
-# SSH crypto. Every entry is checked against `ssh -Q` on the target in the
-# preflight; the run stops if the installed OpenSSH does not support one.
-# Verified against OpenSSH 10.2p1 (Ubuntu 26.04) on 2026-11-07.
-# chacha20-poly1305 is left out in line with the CIS role default.
-baseline_ssh_ciphers:
-  - aes256-gcm@openssh.com
-  - aes128-gcm@openssh.com
-  - aes256-ctr
-  - aes192-ctr
-  - aes128-ctr
-baseline_ssh_macs:
-  - hmac-sha2-512-etm@openssh.com
-  - hmac-sha2-256-etm@openssh.com
-  - hmac-sha2-512
-  - hmac-sha2-256
-# Post-quantum hybrid first (CIS 5.1.14).
-baseline_ssh_kex:
-  - mlkem768x25519-sha256
-  - sntrup761x25519-sha512
-  - sntrup761x25519-sha512@openssh.com
-  - curve25519-sha256
-  - curve25519-sha256@libssh.org
-  - ecdh-sha2-nistp521
-  - ecdh-sha2-nistp384
-  - ecdh-sha2-nistp256
-  - diffie-hellman-group-exchange-sha256
-  - diffie-hellman-group16-sha512
-  - diffie-hellman-group18-sha512
+# SSH crypto lists live in group_vars/all/main.yml (shared with the CIS role).
+baseline_ssh_ciphers: "{{ ssh_ciphers }}"
+baseline_ssh_macs: "{{ ssh_macs }}"
+baseline_ssh_kex: "{{ ssh_kex_algorithms }}"
 
 baseline_password_max_days: 365
 baseline_password_min_days: 1

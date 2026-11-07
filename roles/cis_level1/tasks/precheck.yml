@@ -1,0 +1,45 @@
+---
+- name: Precheck | Look for a TRMM installation
+  ansible.builtin.stat:
+    path: /rmm/api/tacticalrmm/tacticalrmm/local_settings.py
+  register: cis_level1_trmm
+
+- name: Precheck | Enforce order baseline -> TRMM install -> CIS hardening
+  ansible.builtin.assert:
+    that: cis_level1_trmm.stat.exists or (cis_level1_allow_without_trmm | bool)
+    fail_msg: >-
+      TRMM is not installed. Hardening first would break the installer (noexec /tmp,
+      postgres login shell used by install.sh, umask 027). Run 02-trmm-install.yml first.
+    quiet: true
+
+- name: Precheck | GRUB password hash supplied (CIS 1.4.1)
+  ansible.builtin.assert:
+    that:
+      - vault_grub_password_hash is defined
+      - vault_grub_password_hash is match('^grub\.pbkdf2\.sha512\.')
+    fail_msg: "Set vault_grub_password_hash (grub-mkpasswd-pbkdf2) or cis_grub_password_enabled: false (+ exception)."
+    quiet: true
+  when: cis_grub_password_enabled | bool
+
+- name: Precheck | Detect sudo implementation
+  ansible.builtin.command: sudo --version
+  changed_when: false
+  check_mode: false
+  register: cis_level1_sudo_version
+
+- name: Precheck | Record sudo package for CIS 5.2.1
+  ansible.builtin.set_fact:
+    cis_level1_sudo_package: "{{ 'sudo-rs' if 'sudo-rs' in cis_level1_sudo_version.stdout else 'sudo' }}"
+
+- name: Precheck | Root account must be locked or have a password (CIS 5.4.2.4 pre-check in the role)
+  ansible.builtin.command: passwd -S root
+  changed_when: false
+  check_mode: false
+  register: cis_level1_root_status
+
+- name: Precheck | Report
+  ansible.builtin.debug:
+    msg:
+      - "sudo implementation: {{ cis_level1_sudo_package }}"
+      - "root account: {{ cis_level1_root_status.stdout }}"
+      - "TRMM installed: {{ cis_level1_trmm.stat.exists }}"

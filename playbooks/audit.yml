@@ -1,0 +1,83 @@
+---
+# Compliance evidence: Lynis + the CIS role's own audit (syver/goss content).
+# OpenSCAP is not used: SCAP Security Guide 0.1.82 has no CIS profile for
+# ubuntu2604 (only "default") as of 2026-11-07. See docs/compliance-mapping.md.
+#
+#   scripts/audit.sh before|after|adhoc
+# Results: reports/<host>/<UTC timestamp>-<phase>/ (gitignored)
+
+- name: Prepare pinned CIS audit content on the controller
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    _audit_root: "{{ playbook_dir }}/../.galaxy/audit"
+  tasks:
+    - name: Clone UBUNTU26-CIS-Audit at the pinned commit
+      ansible.builtin.git:
+        repo: https://github.com/ansible-lockdown/UBUNTU26-CIS-Audit.git
+        dest: "{{ _audit_root }}/UBUNTU26-CIS-Audit"
+        version: 30675914e43b3d3821094c5f675d1baa993dc061
+
+    - name: Pack it for upload (no git or GitHub access needed on the server)
+      ansible.builtin.command:
+        argv: [tar, --exclude=.git, -C, "{{ _audit_root }}", -czf,
+               "{{ _audit_root }}/UBUNTU26-CIS-Audit-30675914.tar.gz", UBUNTU26-CIS-Audit]
+        creates: "{{ _audit_root }}/UBUNTU26-CIS-Audit-30675914.tar.gz"
+
+- name: Audit the Tactical RMM host
+  hosts: trmm_servers
+  become: true
+  gather_facts: true
+  vars:
+    _phase: "{{ cis_audit_phase | default('adhoc') }}"
+    _stamp: "{{ now(utc=true).strftime('%Y%m%dT%H%M%SZ') }}"
+    _dest: "{{ playbook_dir }}/../reports/{{ inventory_hostname }}/{{ _stamp }}-{{ _phase }}/"
+    _remote_dir: /var/log/cis-audit
+  tasks:
+    - name: Skip when audits are disabled for this run
+      ansible.builtin.meta: end_host
+      when: not (site_run_audits | default(true) | bool)
+
+    - name: Fix the report directory name for this run
+      ansible.builtin.set_fact:
+        cis_audit_dest: "{{ _dest }}"
+
+    - name: Local report directory
+      ansible.builtin.file:
+        path: "{{ cis_audit_dest }}"
+        state: directory
+        mode: "0750"
+      delegate_to: localhost
+      become: false
+
+    - name: Remote audit directory
+      ansible.builtin.file:
+        path: "{{ _remote_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Lynis audit
+      ansible.builtin.command:
+        argv: [lynis, audit, system, --quick, --no-colors, --quiet,
+               --report-file, "{{ _remote_dir }}/lynis-report.dat",
+               --log-file, "{{ _remote_dir }}/lynis.log"]
+      changed_when: false
+      check_mode: false
+
+    - name: Fetch Lynis results
+      ansible.builtin.fetch:
+        src: "{{ _remote_dir }}/{{ item }}"
+        dest: "{{ cis_audit_dest }}"
+        flat: true
+      loop: [lynis-report.dat, lynis.log]
+
+    - name: CIS audit (ends the play for the host when done)
+      ansible.builtin.include_role:
+        name: cis_level1
+        tasks_from: audit.yml
+      vars:
+        cis_level1_audit_dest: "{{ cis_audit_dest }}"
+        cis_level1_audit_archive: "{{ playbook_dir }}/../.galaxy/audit/UBUNTU26-CIS-Audit-30675914.tar.gz"

@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+# {{ ansible_managed }}
+# Compress rotated audit logs (audit.log.N) into the archive directory and
+# delete archives older than {{ cis_audit_log_local_retention_days }} days.
+set -euo pipefail
+umask 077
+
+src=/var/log/audit
+dst="{{ cis_level1_audit_archive_dir }}"
+
+shopt -s nullglob
+for f in "${src}"/audit.log.[0-9]*; do
+  stamp="$(date -r "${f}" +%Y%m%dT%H%M%S)"
+  gzip -c "${f}" >"${dst}/audit-${stamp}.log.gz"
+  chmod 0600 "${dst}/audit-${stamp}.log.gz"
+  rm -f "${f}"
+done
+
+find "${dst}" -maxdepth 1 -name 'audit-*.log.gz' -mtime "+{{ cis_audit_log_local_retention_days }}" -delete
+logger -t audit-log-archive -p authpriv.info "rotated audit logs archived; retention {{ cis_audit_log_local_retention_days }}d"

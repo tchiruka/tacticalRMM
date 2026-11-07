@@ -1,0 +1,10 @@
+---
+# auditd refuses `systemctl restart` (RefuseManualStop); SIGHUP makes it
+# re-read auditd.conf and its plugins without touching the loaded rules.
+- name: Reconfigure auditd
+  ansible.builtin.command: pkill -HUP -x auditd
+  changed_when: true
+
+- name: Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true
