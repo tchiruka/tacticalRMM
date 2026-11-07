@@ -1,0 +1,6 @@
+# Scoped suppressions (one rule, one file each) - reason for every entry:
+# roles/cis_level1 sets the variables of the vendored ansible-lockdown
+# UBUNTU26-CIS role (ubtu26cis_*, audit_*, os_check, skip_reboot). Those
+# names are that role's public interface and cannot carry our role prefix.
+roles/cis_level1/vars/main.yml var-naming[no-role-prefix] skip
+roles/cis_level1/tasks/audit.yml var-naming[no-role-prefix] skip

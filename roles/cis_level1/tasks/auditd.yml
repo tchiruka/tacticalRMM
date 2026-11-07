@@ -1,0 +1,72 @@
+---
+# CIS 6.2.2.2 sets max_log_file_action = keep_logs, so auditd never deletes
+# logs and /var/log/audit grows without bound. Rotated files are compressed
+# into an archive directory and pruned after cis_audit_log_local_retention_days;
+# long-term retention (PCI-DSS 10.5.1) is the SIEM plus backups.
+
+- name: Auditd | Archive directory (CIS 6.2.4.4 mode)
+  ansible.builtin.file:
+    path: "{{ cis_level1_audit_archive_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Auditd | Archive script
+  ansible.builtin.template:
+    src: audit-log-archive.sh.j2
+    dest: /usr/local/sbin/audit-log-archive
+    owner: root
+    group: root
+    mode: "0750"
+
+- name: Auditd | Archive service and daily timer
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item.name }}"
+    content: "{{ item.content }}"
+    owner: root
+    group: root
+    mode: "0644"
+  loop:
+    - name: audit-log-archive.service
+      content: |
+        # Managed by Ansible (role cis_level1)
+        [Unit]
+        Description=Compress and prune rotated audit logs
+
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/local/sbin/audit-log-archive
+    - name: audit-log-archive.timer
+      content: |
+        # Managed by Ansible (role cis_level1)
+        [Unit]
+        Description=Daily audit log archive
+
+        [Timer]
+        OnCalendar=daily
+        RandomizedDelaySec=30min
+        Persistent=true
+
+        [Install]
+        WantedBy=timers.target
+  loop_control:
+    label: "{{ item.name }}"
+  notify: Reload systemd
+
+- name: Auditd | Flush handlers
+  ansible.builtin.meta: flush_handlers
+
+- name: Auditd | Archive timer enabled
+  ansible.builtin.systemd_service:
+    name: audit-log-archive.timer
+    enabled: true
+    state: started
+  when: not ansible_check_mode
+
+- name: Auditd | Send audit events to syslog for the SIEM
+  ansible.builtin.lineinfile:
+    path: /etc/audit/plugins.d/syslog.conf
+    regexp: '^active\s*='
+    line: "active = {{ 'yes' if siem_enabled | bool else 'no' }}"
+  notify: Reconfigure auditd

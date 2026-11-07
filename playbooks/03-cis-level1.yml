@@ -1,0 +1,10 @@
+---
+# Phase 3: CIS Ubuntu Linux 26.04 LTS Benchmark v1.0.0, Level 1 - Server
+# (plus the adopted Level 2 auditd controls), applied AFTER the TRMM install.
+# Take a VM snapshot first. May reboot the host (cis_level1_reboot_allowed).
+- name: Apply CIS Level 1 hardening
+  hosts: trmm_servers
+  become: true
+  gather_facts: true
+  roles:
+    - role: cis_level1

@@ -1,0 +1,21 @@
+---
+# Hardening runs AFTER the TRMM install. Set true only to harden a host
+# without TRMM (e.g. a lab VM testing the baseline + CIS roles).
+cis_level1_allow_without_trmm: false
+
+# Reboot automatically when the CIS role reports that a change (kernel
+# parameters for auditd, /tmp options, ...) needs one.
+cis_level1_reboot_allowed: true
+cis_level1_reboot_timeout: 900
+
+cis_level1_trmm_units:
+  - nginx.service
+  - rmm.service
+  - daphne.service
+  - celery.service
+  - celerybeat.service
+  - nats.service
+  - nats-api.service
+  - meshcentral.service
+
+cis_level1_audit_archive_dir: /var/log/audit/archive

@@ -28,3 +28,10 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - Playbooks: `02-trmm-install.yml`, `04-post-hardening-verify.yml`,
   `trmm-backup-now.yml`, `trmm-upgrade.yml` (gated, snapshot + backup first),
   `trmm-restore.yml` (fresh 26.04 VM).
+- `cis_level1` role wrapping ansible-lockdown UBUNTU26-CIS 0.9.0 (CIS Ubuntu
+  26.04 v1.0.0): all 350 controls set explicitly in role vars with level,
+  title and reason; Level 2 auditd controls adopted; install-before-harden
+  order guard; narrow AppArmor enforcement; audit-log archive/retention;
+  auditd->syslog when SIEM is enabled; controlled reboot + TRMM recheck.
+- `03-cis-level1.yml`, `audit.yml` (Lynis + role audit, before/after),
+  `site.yml`; `scripts/gen-cis-vars.py` to regenerate the control block.

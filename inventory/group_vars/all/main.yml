@@ -22,6 +22,36 @@ trmm_user: tactical
 # Only members of this group may log in over SSH (CIS 5.1.5).
 baseline_ssh_allow_group: sshlogin
 
+# --- SSH crypto (role baseline and CIS 5.1.7/5.1.13/5.1.17) -----------------
+# Every entry is checked against `ssh -Q` on the target in the
+# preflight; the run stops if the installed OpenSSH does not support one.
+# Verified against OpenSSH 10.2p1 (Ubuntu 26.04) on 2026-11-07.
+# chacha20-poly1305 is left out in line with the CIS role default.
+ssh_ciphers:
+  - aes256-gcm@openssh.com
+  - aes128-gcm@openssh.com
+  - aes256-ctr
+  - aes192-ctr
+  - aes128-ctr
+ssh_macs:
+  - hmac-sha2-512-etm@openssh.com
+  - hmac-sha2-256-etm@openssh.com
+  - hmac-sha2-512
+  - hmac-sha2-256
+# Post-quantum hybrid first (CIS 5.1.14).
+ssh_kex_algorithms:
+  - mlkem768x25519-sha256
+  - sntrup761x25519-sha512
+  - sntrup761x25519-sha512@openssh.com
+  - curve25519-sha256
+  - curve25519-sha256@libssh.org
+  - ecdh-sha2-nistp521
+  - ecdh-sha2-nistp384
+  - ecdh-sha2-nistp256
+  - diffie-hellman-group-exchange-sha256
+  - diffie-hellman-group16-sha512
+  - diffie-hellman-group18-sha512
+
 # --- Hardening toggles ---------------------------------------------------------
 # GRUB password (CIS 1.4.1). Boot is unrestricted; editing entries / the
 # GRUB shell needs the password.

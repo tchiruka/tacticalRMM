@@ -1,0 +1,17 @@
+---
+# Audit-only run of the vendor role (no remediation): it installs the
+# checksum-pinned `syver` binary, unpacks the audit content prepared on the
+# controller, evaluates every control enabled in vars/main.yml, fetches the
+# JSON result to the controller and ends the play for the host.
+- name: Audit | CIS Ubuntu 26.04 v1.0.0 audit (ansible-lockdown UBUNTU26-CIS-Audit)
+  ansible.builtin.include_role:
+    name: ubuntu26_cis
+  vars:
+    setup_audit: true
+    run_audit: true
+    audit_only: true
+    fetch_audit_output: true
+    audit_output_collection_method: fetch
+    audit_output_destination: "{{ cis_level1_audit_dest }}"
+    audit_content: archive
+    audit_conf_source: "{{ cis_level1_audit_archive }}"
