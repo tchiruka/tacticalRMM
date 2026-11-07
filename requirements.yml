@@ -1,0 +1,23 @@
+---
+# Install with:  ansible-galaxy install -r requirements.yml
+# (paths come from ansible.cfg: .galaxy/roles and .galaxy/collections)
+#
+# Every dependency is pinned. Review the upstream changelog before bumping
+# and record the new version in docs/compliance-mapping.md.
+
+roles:
+  # ansible-lockdown UBUNTU26-CIS, release 0.9.0 (2026-11-02),
+  # implements CIS Ubuntu Linux 26.04 LTS Benchmark v1.0.0.
+  # Pinned by commit hash, not by tag, so a moved tag cannot change the code.
+  - name: ubuntu26_cis
+    src: https://github.com/ansible-lockdown/UBUNTU26-CIS.git
+    scm: git
+    version: 9746233c6b14dd94758fc11e39e51ce6f5af24b7
+
+collections:
+  - name: community.general
+    version: "13.5.0"
+  - name: ansible.posix
+    version: "2.2.2"
+  - name: community.crypto
+    version: "3.5.1"

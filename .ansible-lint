@@ -1,0 +1,20 @@
+---
+profile: production
+
+exclude_paths:
+  - .venv/
+  - .galaxy/
+  - .github/
+  - reports/
+  - inventory/group_vars/all/vault.example.yml
+
+# Example/placeholder inventory is linted like any other file.
+kinds:
+  - yaml: "inventory/**/*.yml"
+
+# Third-party role is vendored at install time into .galaxy/roles and is
+# linted upstream; we only lint our own code.
+mock_roles:
+  - ubuntu26_cis
+
+offline: true

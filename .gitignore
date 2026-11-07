@@ -1,0 +1,44 @@
+# --- Secrets & environment-specific config (commit only *.example files) ---
+inventory/hosts.yml
+inventory/group_vars/all/site.yml
+inventory/group_vars/all/vault.yml
+inventory/host_vars/
+credentials/
+*.vault.yml
+.vault_pass*
+vault-pass*
+*.vault-pass
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+*.age
+age-key*.txt
+rclone.conf
+
+# --- Reports, state and run artefacts ---
+reports/
+*.retry
+*.log
+.ansible/
+.cache/
+fact_cache/
+
+# --- Tooling ---
+.venv/
+.galaxy/
+__pycache__/
+*.pyc
+.molecule/
+.vagrant/
+
+# --- Editors / OS ---
+.idea/
+.vscode/
+*.swp
+.DS_Store

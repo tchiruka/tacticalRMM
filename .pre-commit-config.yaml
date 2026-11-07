@@ -1,0 +1,45 @@
+---
+# Install once:  scripts/bootstrap-dev.sh && .venv/bin/pre-commit install
+# Run manually:  .venv/bin/pre-commit run --all-files
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-merge-conflict
+      - id: check-added-large-files
+      - id: detect-private-key
+      - id: check-yaml
+        # Ansible YAML uses custom tags (!vault, !unsafe).
+        args: [--unsafe]
+
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        args: [--strict]
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.11.0.1
+    hooks:
+      - id: shellcheck
+        args: [--severity=style]
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      # Uses the checksum-verified binary installed by scripts/bootstrap-dev.sh
+      # (avoids pre-commit bootstrapping a Go toolchain).
+      - id: gitleaks-system
+        pass_filenames: false
+
+  - repo: local
+    hooks:
+      - id: ansible-lint
+        name: ansible-lint
+        # Needs the venv from scripts/bootstrap-dev.sh (collections in .galaxy/).
+        entry: ansible-lint
+        language: system
+        pass_filenames: false
+        files: \.(ya?ml|j2)$
