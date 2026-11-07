@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+# {{ ansible_managed }}
+# Nightly Tactical RMM backup:
+#   1. download the latest official backup.sh (it never updates itself)
+#   2. run it (DB dumps, Mesh data, certs, nginx/systemd/conf.d, settings)
+#   3. encrypt the archive with age (public keys only on this host)
+#   4. ship it off-host ({{ trmm_backup_destination }}) and apply retention
+# Runs as {{ trmm_user }} from trmm-backup.service. Logs to syslog (trmm-backup).
+set -Eeuo pipefail
+umask 077
+
+readonly SCRIPT_URL="{{ trmm_backup_script_url }}"
+readonly WORKDIR="{{ trmm_backup_home }}"
+readonly LOCAL_DIR="{{ trmm_backup_local_dir }}"
+readonly STATE_DIR="{{ trmm_backup_state_dir }}"
+readonly CONF_DIR="{{ trmm_backup_config_dir }}"
+readonly DEST="{{ trmm_backup_destination }}"
+readonly LOCAL_DAYS={{ trmm_backup_local_retention_days }}
+readonly REMOTE_DAYS={{ trmm_backup_remote_retention_days }}
+readonly REMOTE_PREFIX="{{ trmm_backup_remote_prefix }}"
+
+log() { logger -t trmm-backup -p "user.$1" -- "$2"; printf '[%s] %s\n' "$1" "$2"; }
+fail() {
+  log err "$1"
+  date +%s >"${STATE_DIR}/last_failure"
+  exit 1
+}
+trap 'fail "aborted at line ${LINENO}"' ERR
+
+cd "${WORKDIR}"
+
+# --- 1. latest official backup.sh -------------------------------------------
+tmp="$(mktemp "${WORKDIR}/.backup.sh.XXXXXX")"
+curl -fsSL --retry 3 --max-time 120 -o "${tmp}" "${SCRIPT_URL}" || fail "could not download ${SCRIPT_URL}"
+head -1 "${tmp}" | grep -q '^#!/usr/bin/env bash' || fail "downloaded backup.sh is not a bash script"
+version="$(grep -m1 '^SCRIPT_VERSION=' "${tmp}" | cut -d'"' -f2)"
+[[ -n "${version}" ]] || fail "downloaded backup.sh has no SCRIPT_VERSION"
+sum="$(sha256sum "${tmp}" | cut -d' ' -f1)"
+previous="$(cat "${STATE_DIR}/backup_sh.sha256" 2>/dev/null || true)"
+if [[ "${sum}" != "${previous}" ]]; then
+  log warning "backup.sh changed upstream: SCRIPT_VERSION=${version} sha256=${sum} (previous ${previous:-none}); review the diff"
+fi
+chmod 0750 "${tmp}"
+mv -f "${tmp}" "${WORKDIR}/backup.sh"
+echo "${sum}" >"${STATE_DIR}/backup_sh.sha256"
+
+# --- 2. run it ----------------------------------------------------------------
+output="$("${WORKDIR}/backup.sh" 2>&1)" || {
+  printf '%s\n' "${output}" | tail -20
+  fail "backup.sh (SCRIPT_VERSION=${version}) failed"
+}
+archive="$(printf '%s\n' "${output}" | grep -o "${LOCAL_DIR}/rmm-backup-[0-9_]*\.tar" | tail -1 || true)"
+[[ -n "${archive}" && -s "${archive}" ]] || fail "backup.sh finished but no archive was found"
+
+# --- 3. encrypt -----------------------------------------------------------------
+age -R "${CONF_DIR}/age-recipients.txt" -o "${archive}.age" "${archive}"
+rm -f "${archive}"
+(cd "${LOCAL_DIR}" && sha256sum "$(basename "${archive}.age")" >"$(basename "${archive}.age").sha256")
+size="$(du -h "${archive}.age" | cut -f1)"
+
+# --- 4. ship off-host and apply remote retention --------------------------------
+case "${DEST}" in
+  s3)
+    rclone --config "${CONF_DIR}/rclone.conf" copy --no-traverse \
+      "${archive}.age" "${archive}.age.sha256" \
+      "{{ trmm_backup_rclone_remote }}:{{ trmm_backup_s3_bucket | default('') }}/${REMOTE_PREFIX}/" \
+      || fail "upload to S3 failed"
+    rclone --config "${CONF_DIR}/rclone.conf" delete --min-age "${REMOTE_DAYS}d" \
+      "{{ trmm_backup_rclone_remote }}:{{ trmm_backup_s3_bucket | default('') }}/${REMOTE_PREFIX}/" \
+      || log warning "remote retention (S3) failed - object lock or permissions?"
+    ;;
+  rsync)
+    rsync -a --chmod=F0600 \
+      -e "ssh -i ${CONF_DIR}/id_backup -o UserKnownHostsFile=${CONF_DIR}/known_hosts -o StrictHostKeyChecking=yes -o BatchMode=yes" \
+      "${archive}.age" "${archive}.age.sha256" \
+      "{{ trmm_backup_rsync_target | default('') }}${REMOTE_PREFIX}/" \
+      || fail "rsync to {{ trmm_backup_rsync_target | default('') }} failed"
+    # Remote retention is enforced on the backup target (immutable repository).
+    ;;
+  nfs)
+    target="{{ trmm_backup_nfs_mountpoint }}/${REMOTE_PREFIX}"
+    mountpoint -q "{{ trmm_backup_nfs_mountpoint }}" || fail "NFS export not mounted"
+    mkdir -p "${target}"
+    cp "${archive}.age" "${archive}.age.sha256" "${target}/" || fail "copy to NFS failed"
+    find "${target}" -maxdepth 1 -name 'rmm-backup-*.tar.age*' -mtime "+${REMOTE_DAYS}" -delete
+    ;;
+  *)
+    fail "unknown destination ${DEST}"
+    ;;
+esac
+
+# --- 5. local retention -----------------------------------------------------------
+find "${LOCAL_DIR}" -maxdepth 1 -name 'rmm-backup-*.tar.age*' -mtime "+${LOCAL_DAYS}" -delete
+
+date +%s >"${STATE_DIR}/last_success"
+chmod 0644 "${STATE_DIR}/last_success"
+log notice "backup OK: $(basename "${archive}.age") (${size}), backup.sh SCRIPT_VERSION=${version}, shipped via ${DEST}"

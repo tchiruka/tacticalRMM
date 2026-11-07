@@ -1,0 +1,41 @@
+---
+- name: Detect an existing installation
+  ansible.builtin.stat:
+    path: "{{ trmm_server_local_settings_file }}"
+  register: trmm_server_local_settings
+  tags: [always]
+
+- name: Set installation state
+  ansible.builtin.set_fact:
+    trmm_server_installed: "{{ trmm_server_local_settings.stat.exists }}"
+  tags: [always]
+
+- name: Service account
+  ansible.builtin.import_tasks: user.yml
+  tags: [trmm, trmm_user]
+
+- name: Upstream pin and controller checks
+  ansible.builtin.import_tasks: preflight.yml
+  tags: [trmm, preflight]
+
+- name: TLS certificate
+  ansible.builtin.import_tasks: tls.yml
+  tags: [trmm, tls]
+
+- name: Install Tactical RMM
+  ansible.builtin.import_tasks: install.yml
+  tags: [trmm, install]
+
+- name: SMTP alert settings
+  ansible.builtin.import_tasks: smtp.yml
+  tags: [trmm, smtp]
+
+- name: Health check
+  ansible.builtin.import_tasks: healthcheck.yml
+  tags: [trmm, monitoring]
+  when: trmm_healthcheck_enabled | bool
+
+- name: Log forwarding
+  ansible.builtin.import_tasks: log_forwarding.yml
+  tags: [trmm, siem]
+  when: siem_enabled | bool

@@ -1,0 +1,135 @@
+---
+# Both modes end with a full-chain certificate and key at stable paths that
+# are handed to `install.sh --use-own-cert` (an official installer flag).
+# letsencrypt_dns01 uses a certbot DNS plugin instead of the installer's
+# interactive `certbot --manual` flow, which cannot renew unattended.
+
+- name: TLS | Validate mode
+  ansible.builtin.assert:
+    that: trmm_tls_mode in ['letsencrypt_dns01', 'own_cert']
+    fail_msg: "trmm_tls_mode must be letsencrypt_dns01 or own_cert"
+    quiet: true
+
+- name: TLS | Certificate directory
+  ansible.builtin.file:
+    path: "{{ trmm_server_cert_dir }}"
+    state: directory
+    owner: "{{ trmm_user }}"
+    group: "{{ trmm_user }}"
+    mode: "0750"
+
+- name: TLS | Let's Encrypt via DNS-01
+  when: trmm_tls_mode == 'letsencrypt_dns01'
+  block:
+    - name: TLS | certbot and DNS plugin
+      ansible.builtin.apt:
+        name:
+          - certbot
+          - "python3-certbot-dns-{{ trmm_certbot_dns_plugin }}"
+        state: present
+
+    - name: TLS | DNS provider credentials
+      ansible.builtin.copy:
+        dest: "{{ trmm_server_certbot_dns_credentials_file }}"
+        content: "{{ vault_certbot_dns_credentials }}"
+        owner: root
+        group: root
+        mode: "0600"
+      no_log: true
+      when: trmm_server_certbot_dns_uses_credentials_file | bool
+
+    - name: TLS | Deploy hook (copy to stable paths, restart TRMM services)
+      ansible.builtin.template:
+        src: certbot-deploy-hook.sh.j2
+        dest: /etc/letsencrypt/renewal-hooks/deploy/50-trmm.sh
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: TLS | Obtain wildcard certificate
+      vars:
+        _cred_args: >-
+          {{ ['--dns-' ~ trmm_certbot_dns_plugin ~ '-credentials', trmm_server_certbot_dns_credentials_file]
+             if trmm_server_certbot_dns_uses_credentials_file | bool else [] }}
+      ansible.builtin.command:
+        argv: "{{ ['certbot', 'certonly', '--non-interactive', '--agree-tos', '--no-eff-email',
+                   '-m', trmm_admin_email, '--cert-name', trmm_root_domain,
+                   '--authenticator', 'dns-' ~ trmm_certbot_dns_plugin]
+                  + _cred_args
+                  + ['--dns-' ~ trmm_certbot_dns_plugin ~ '-propagation-seconds', trmm_certbot_dns_propagation_seconds | string,
+                     '--deploy-hook', '/etc/letsencrypt/renewal-hooks/deploy/50-trmm.sh',
+                     '-d', '*.' ~ trmm_root_domain] }}"
+        creates: "/etc/letsencrypt/live/{{ trmm_root_domain }}/fullchain.pem"
+
+    - name: TLS | certbot renewal timer enabled
+      ansible.builtin.systemd_service:
+        name: certbot.timer
+        enabled: true
+        state: started
+
+    - name: TLS | Check stable certificate copy exists
+      ansible.builtin.stat:
+        path: "{{ trmm_server_cert_fullchain }}"
+      register: trmm_server_cert_copy
+
+    - name: TLS | Populate stable paths on first run
+      ansible.builtin.command: /etc/letsencrypt/renewal-hooks/deploy/50-trmm.sh
+      environment:
+        RENEWED_LINEAGE: "/etc/letsencrypt/live/{{ trmm_root_domain }}"
+      changed_when: true
+      when: not trmm_server_cert_copy.stat.exists
+
+- name: TLS | Operator-supplied certificate
+  when: trmm_tls_mode == 'own_cert'
+  block:
+    - name: TLS | Full-chain certificate
+      ansible.builtin.copy:
+        src: "{{ trmm_own_cert_fullchain_src }}"
+        dest: "{{ trmm_server_cert_fullchain }}"
+        owner: "{{ trmm_user }}"
+        group: "{{ trmm_user }}"
+        mode: "0644"
+      register: trmm_server_own_cert
+
+    - name: TLS | Private key
+      ansible.builtin.copy:
+        src: "{{ trmm_own_cert_privkey_src }}"
+        dest: "{{ trmm_server_cert_privkey }}"
+        owner: "{{ trmm_user }}"
+        group: "{{ trmm_user }}"
+        mode: "0600"
+      no_log: true
+      register: trmm_server_own_key
+
+    - name: TLS | Restart TRMM services after certificate change
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        state: restarted
+      loop: "{{ trmm_server_cert_reload_services }}"
+      when:
+        - trmm_server_installed
+        - trmm_server_own_cert is changed or trmm_server_own_key is changed
+
+- name: TLS | Inspect certificate
+  community.crypto.x509_certificate_info:
+    path: "{{ trmm_server_cert_fullchain }}"
+    valid_at:
+      one_week: "+7d"
+  register: trmm_server_cert_info
+  when: not ansible_check_mode
+
+- name: TLS | Assert certificate covers all three FQDNs and is valid for > 7 days
+  vars:
+    _sans: "{{ trmm_server_cert_info.subject_alt_name | default([]) | map('regex_replace', '^DNS:', '') | list }}"
+    _fqdns: "{{ [trmm_api_fqdn, trmm_frontend_fqdn, trmm_mesh_fqdn] }}"
+  ansible.builtin.assert:
+    that:
+      - trmm_server_cert_info.valid_at.one_week
+      # A wildcard only covers names exactly one label below the root domain.
+      - >-
+        (('*.' ~ trmm_root_domain) in _sans
+         and _fqdns | select('match', '^[a-z0-9-]+\.' ~ (trmm_root_domain | regex_escape) ~ '$') | list | length == 3)
+        or _fqdns | reject('in', _sans) | list | length == 0
+    fail_msg: "Certificate SANs {{ _sans }} do not cover the TRMM FQDNs, or it expires within 7 days."
+    quiet: true
+  when: not ansible_check_mode

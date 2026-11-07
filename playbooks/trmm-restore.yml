@@ -1,0 +1,84 @@
+---
+# Restore a TRMM backup onto a FRESH Ubuntu 26.04 VM (OS migration, DR,
+# restore test). Order: 01-baseline -> this playbook -> 03-cis-level1 ->
+# 04-post-hardening-verify. See docs/runbook.md "Restore".
+#
+# 1. Decrypt the archive on an offline/admin workstation that holds the age
+#    private key:  age -d -i key.txt -o rmm-backup-X.tar rmm-backup-X.tar.age
+# 2. ansible-playbook playbooks/trmm-restore.yml \
+#      -e trmm_restore_archive=/secure/path/rmm-backup-X.tar
+# 3. Delete the decrypted copy on the workstation.
+
+- name: Restore Tactical RMM from backup
+  hosts: trmm_servers
+  become: true
+  gather_facts: true
+  vars:
+    trmm_home: "/home/{{ trmm_user }}"
+  tasks:
+    - name: Require an archive path
+      ansible.builtin.assert:
+        that:
+          - trmm_restore_archive is defined
+          - trmm_restore_archive is match('.*rmm-backup-[0-9_]+\.tar$')
+        fail_msg: "Pass -e trmm_restore_archive=/path/to/rmm-backup-<date>.tar (decrypted)."
+        quiet: true
+
+    - name: Refuse to restore over an existing installation (restore.sh needs a clean server)
+      ansible.builtin.stat:
+        path: /rmm/api/tacticalrmm
+      register: _existing
+      failed_when: _existing.stat.exists
+
+    - name: Service account and sudo rule
+      ansible.builtin.import_role:
+        name: trmm_server
+        tasks_from: user.yml
+
+    - name: Copy archive to the server
+      ansible.builtin.copy:
+        src: "{{ trmm_restore_archive }}"
+        dest: "{{ trmm_home }}/{{ trmm_restore_archive | basename }}"
+        owner: "{{ trmm_user }}"
+        group: "{{ trmm_user }}"
+        mode: "0600"
+
+    - name: Download the latest restore.sh (it must match master)
+      ansible.builtin.get_url:
+        url: https://raw.githubusercontent.com/amidaware/tacticalrmm/master/restore.sh
+        dest: "{{ trmm_home }}/restore.sh"
+        force: true
+        owner: "{{ trmm_user }}"
+        group: "{{ trmm_user }}"
+        mode: "0750"
+
+    - name: Run restore.sh as the install user
+      ansible.builtin.command:
+        argv: [bash, -c, "./restore.sh '{{ trmm_restore_archive | basename }}' </dev/null"]
+        chdir: "{{ trmm_home }}"
+      become: true
+      become_user: "{{ trmm_user }}"
+      environment:
+        LANG: C.UTF-8
+        HOME: "{{ trmm_home }}"
+      async: 7200
+      poll: 30
+      register: _restore
+      changed_when: true
+      no_log: true
+
+    - name: Keep the restore log (root only)
+      ansible.builtin.copy:
+        dest: /var/log/trmm-restore.log
+        content: "{{ _restore.stdout | default('') }}\n{{ _restore.stderr | default('') }}\n"
+        owner: root
+        group: root
+        mode: "0600"
+
+    - name: Remove the archive copy from the server
+      ansible.builtin.file:
+        path: "{{ trmm_home }}/{{ trmm_restore_archive | basename }}"
+        state: absent
+
+- name: Re-apply TRMM configuration (certificates, SMTP, health check, backups)
+  ansible.builtin.import_playbook: 02-trmm-install.yml

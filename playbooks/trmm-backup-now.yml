@@ -1,0 +1,31 @@
+---
+# On-demand backup (same job as the nightly timer). Use before any change.
+#   ansible-playbook playbooks/trmm-backup-now.yml
+- name: Take a Tactical RMM backup now
+  hosts: trmm_servers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Run the backup job and wait for it to finish
+      ansible.builtin.systemd_service:
+        name: trmm-backup.service
+        state: started
+      async: 14400
+      poll: 30
+
+    - name: Read the backup result
+      ansible.builtin.command: journalctl -u trmm-backup.service -n 5 --no-pager -o cat
+      changed_when: false
+      register: _backup_journal
+
+    - name: Read the last-success timestamp
+      ansible.builtin.slurp:
+        src: /var/lib/trmm-backup/last_success
+      register: _backup_last
+
+    - name: Assert the backup succeeded within the last hour
+      ansible.builtin.assert:
+        that:
+          - (now().timestamp() | int) - (_backup_last.content | b64decode | trim | int) < 3600
+        fail_msg: "Backup did not succeed: {{ _backup_journal.stdout_lines }}"
+        success_msg: "{{ _backup_journal.stdout_lines | select('search', 'backup OK') | list }}"

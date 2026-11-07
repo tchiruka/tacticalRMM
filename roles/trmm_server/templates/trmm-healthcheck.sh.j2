@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+# {{ ansible_managed }}
+# Tactical RMM health check.
+#   trmm-healthcheck                 Nagios/NRPE output and exit code
+#   trmm-healthcheck --syslog        also log WARNING/CRITICAL to syslog
+#   trmm-healthcheck --prometheus    also write textfile-collector metrics
+# Exit codes: 0 OK, 1 WARNING, 2 CRITICAL, 3 UNKNOWN.
+set -uo pipefail
+
+SERVICES=({% for s in trmm_server_services %}{{ s }} {% endfor %})
+CERT="{{ trmm_server_cert_fullchain }}"
+CERT_WARN_DAYS={{ trmm_cert_warning_days }}
+BACKUP_STATE="/var/lib/trmm-backup/last_success"
+BACKUP_MAX_AGE_H={{ trmm_backup_max_age_hours }}
+BACKUP_ENABLED={{ 'true' if trmm_backup_enabled | bool else 'false' }}
+PROM_DIR="{{ trmm_healthcheck_prometheus_textfile_dir }}"
+FQDNS=({{ trmm_api_fqdn }} {{ trmm_frontend_fqdn }} {{ trmm_mesh_fqdn }})
+DISK_WARN_PCT=85
+DISK_CRIT_PCT=95
+
+state=0
+msgs=()
+metrics=()
+raise() { (($1 > state)) && state=$1; msgs+=("$2"); }
+metric() { metrics+=("$1"); }
+
+for opt in "$@"; do
+  case "${opt}" in
+    --syslog) SYSLOG=1 ;;
+    --prometheus) PROM=1 ;;
+    *) echo "UNKNOWN - bad option ${opt}"; exit 3 ;;
+  esac
+done
+
+# 1. systemd services
+failed=0
+for svc in "${SERVICES[@]}"; do
+  if systemctl is-active --quiet "${svc}"; then
+    metric "trmm_service_up{service=\"${svc}\"} 1"
+  else
+    metric "trmm_service_up{service=\"${svc}\"} 0"
+    raise 2 "${svc} not active"
+    failed=$((failed + 1))
+  fi
+done
+
+# 2. HTTPS endpoints answered locally by nginx (no hairpin NAT needed)
+for fqdn in "${FQDNS[@]}"; do
+  code="$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+    --resolve "${fqdn}:443:127.0.0.1" "https://${fqdn}/" || echo 000)"
+  metric "trmm_https_status{fqdn=\"${fqdn}\"} ${code}"
+  if [[ "${code}" == "000" || "${code}" -ge 500 ]]; then
+    raise 2 "https://${fqdn}/ returned ${code}"
+  fi
+done
+
+# 3. Certificate expiry
+if [[ -r "${CERT}" ]]; then
+  end="$(openssl x509 -enddate -noout -in "${CERT}" | cut -d= -f2)"
+  days=$(( ($(date -d "${end}" +%s) - $(date +%s)) / 86400 ))
+  metric "trmm_cert_days_remaining ${days}"
+  if ((days < 7)); then
+    raise 2 "certificate expires in ${days}d"
+  elif ((days < CERT_WARN_DAYS)); then
+    raise 1 "certificate expires in ${days}d"
+  fi
+else
+  raise 3 "cannot read ${CERT}"
+fi
+
+# 4. Backup freshness
+if [[ "${BACKUP_ENABLED}" == "true" ]]; then
+  if [[ -r "${BACKUP_STATE}" ]]; then
+    age_h=$(( ($(date +%s) - $(cat "${BACKUP_STATE}")) / 3600 ))
+    metric "trmm_backup_age_hours ${age_h}"
+    ((age_h > BACKUP_MAX_AGE_H)) && raise 1 "last successful backup ${age_h}h ago"
+  else
+    metric "trmm_backup_age_hours -1"
+    raise 1 "no successful backup recorded yet"
+  fi
+fi
+
+# 5. Disk usage of key mount points
+for mp in / /var /var/log /var/log/audit /rmmbackups; do
+  [[ -d "${mp}" ]] || continue
+  pct="$(df --output=pcent "${mp}" 2>/dev/null | tail -1 | tr -dc '0-9')"
+  [[ -n "${pct}" ]] || continue
+  metric "trmm_disk_used_percent{mount=\"${mp}\"} ${pct}"
+  if ((pct >= DISK_CRIT_PCT)); then
+    raise 2 "${mp} ${pct}% used"
+  elif ((pct >= DISK_WARN_PCT)); then
+    raise 1 "${mp} ${pct}% used"
+  fi
+done
+
+labels=(OK WARNING CRITICAL UNKNOWN)
+summary="${labels[state]} - ${#SERVICES[@]} services, ${failed} down"
+((${#msgs[@]})) && summary+="; $(IFS='; '; echo "${msgs[*]}")"
+echo "${summary} | services_down=${failed}"
+
+if [[ -n "${SYSLOG:-}" ]] && ((state > 0)); then
+  logger -t trmm-healthcheck -p "daemon.$( ((state == 2)) && echo crit || echo warning)" -- "${summary}"
+fi
+
+if [[ -n "${PROM:-}" && -d "${PROM_DIR}" ]]; then
+  tmp="$(mktemp "${PROM_DIR}/.trmm.prom.XXXXXX")"
+  {
+    echo "# HELP trmm_health_state 0=OK 1=WARNING 2=CRITICAL 3=UNKNOWN"
+    echo "# TYPE trmm_health_state gauge"
+    echo "trmm_health_state ${state}"
+    printf '%s\n' "${metrics[@]}"
+  } >"${tmp}"
+  chmod 0644 "${tmp}"
+  mv -f "${tmp}" "${PROM_DIR}/trmm.prom"
+fi
+
+exit "${state}"

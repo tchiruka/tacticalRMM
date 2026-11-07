@@ -1,0 +1,13 @@
+---
+galaxy_info:
+  role_name: trmm_server
+  namespace: trmm
+  author: Infrastructure Engineering
+  description: Installs Tactical RMM with the official install.sh (non-root user, own/DNS-01 certificate), configures SMTP, health checks and log forwarding.
+  license: MIT
+  min_ansible_version: "2.16"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - resolute
+dependencies: []

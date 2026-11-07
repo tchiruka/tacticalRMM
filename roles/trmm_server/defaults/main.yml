@@ -1,0 +1,56 @@
+---
+trmm_server_home: "/home/{{ trmm_user }}"
+trmm_server_raw_base_url: https://raw.githubusercontent.com/amidaware/tacticalrmm/master
+trmm_server_install_script_url: "{{ trmm_server_raw_base_url }}/install.sh"
+trmm_server_settings_url: "{{ trmm_server_raw_base_url }}/api/tacticalrmm/tacticalrmm/settings.py"
+
+trmm_server_rmm_dir: /rmm
+trmm_server_api_dir: "{{ trmm_server_rmm_dir }}/api/tacticalrmm"
+trmm_server_settings_file: "{{ trmm_server_api_dir }}/tacticalrmm/settings.py"
+trmm_server_local_settings_file: "{{ trmm_server_api_dir }}/tacticalrmm/local_settings.py"
+trmm_server_python: "{{ trmm_server_rmm_dir }}/api/env/bin/python"
+
+# Installer timeout (seconds). It compiles Python, so allow plenty.
+trmm_server_install_timeout: 7200
+
+# --- TLS -----------------------------------------------------------------------
+# Stable certificate paths handed to `install.sh --use-own-cert`. A certbot
+# deploy hook (letsencrypt_dns01) or this role (own_cert) keeps them current.
+trmm_server_cert_dir: /etc/ssl/trmm
+trmm_server_cert_fullchain: "{{ trmm_server_cert_dir }}/fullchain.pem"
+trmm_server_cert_privkey: "{{ trmm_server_cert_dir }}/privkey.pem"
+trmm_server_certbot_dns_credentials_file: /etc/letsencrypt/trmm-dns-credentials.ini
+# route53 reads AWS credentials from the environment instead of a file.
+trmm_server_certbot_dns_uses_credentials_file: true
+# Services the TRMM docs say to restart after a certificate change.
+trmm_server_cert_reload_services: [nginx, meshcentral, rmm, daphne]
+
+# --- Credentials output (controller side) ---------------------------------------
+# Generated credentials are written ONLY here, vault-encrypted.
+trmm_server_credentials_dir: "{{ playbook_dir }}/../credentials"
+trmm_server_credentials_vault_password_file: "{{ lookup('ansible.builtin.env', 'ANSIBLE_VAULT_PASSWORD_FILE') }}"
+
+# --- Services (unit names from install.sh v1.6.1) ------------------------------
+trmm_server_services:
+  - nginx.service
+  - rmm.service
+  - daphne.service
+  - celery.service
+  - celerybeat.service
+  - nats.service
+  - nats-api.service
+  - meshcentral.service
+  - postgresql.service
+  - redis-server.service
+
+# --- Log forwarding (only when siem_enabled) ----------------------------------
+# rsyslog runs as user `syslog` under an enforcing AppArmor profile; files
+# outside /var/log need the AppArmor include below. /var/log/celery is left
+# out until verified on a test VM: CIS 6.1.3.1 tightens /var/log file modes
+# and the files are owned by the tactical user, not group adm.
+trmm_server_log_files:
+  - {path: "{{ trmm_server_api_dir }}/tacticalrmm/private/log/django_debug.log", tag: "trmm-django"}
+  - {path: "{{ trmm_server_api_dir }}/tacticalrmm/private/log/trmm_debug.log", tag: "trmm-app"}
+  - {path: "{{ trmm_server_api_dir }}/tacticalrmm/private/log/error.log", tag: "trmm-nginx-api-error"}
+  - {path: "{{ trmm_server_api_dir }}/tacticalrmm/private/log/access.log", tag: "trmm-nginx-api-access"}
+  - {path: /var/log/nginx/frontend-error.log, tag: "trmm-nginx-frontend-error"}

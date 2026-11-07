@@ -1,0 +1,140 @@
+---
+# Runs the official install.sh unchanged, as the non-root service account,
+# with `--use-own-cert`. The script is interactive and has no answer-file
+# option, so ansible.builtin.expect answers its prompts (prompt strings
+# taken from install.sh SCRIPT_VERSION 93 / TRMM v1.6.1).
+# Everything that can contain a secret runs with no_log; generated
+# credentials go only to a vault-encrypted file on the controller.
+
+- name: Install | Superuser password (vault value or generated)
+  ansible.builtin.set_fact:
+    trmm_server_superuser_password: >-
+      {{ vault_trmm_superuser_password
+         if (vault_trmm_superuser_password | default('') | length) > 0
+         else lookup('ansible.builtin.password', '/dev/null', length=32, chars=['ascii_letters', 'digits']) }}
+  no_log: true
+  when: not trmm_server_installed
+
+- name: Install | Run official installer
+  when: not trmm_server_installed and not ansible_check_mode
+  block:
+    - name: Install | install.sh --use-own-cert (15-40 min; output suppressed - contains secrets)
+      ansible.builtin.expect:
+        command: "{{ trmm_server_home }}/install.sh --use-own-cert"
+        chdir: "{{ trmm_server_home }}"
+        timeout: "{{ trmm_server_install_timeout }}"
+        responses:
+          'Enter the subdomain for the backend': "{{ trmm_api_fqdn }}"
+          'Enter the subdomain for the frontend': "{{ trmm_frontend_fqdn }}"
+          'Enter the subdomain for meshcentral': "{{ trmm_mesh_fqdn }}"
+          'Enter the root domain': "{{ trmm_root_domain }}"
+          'Enter a valid email address for django and meshcentral': "{{ trmm_admin_email }}"
+          'full path to your fullchain\.pem file': "{{ trmm_server_cert_fullchain }}"
+          'full path to your privkey\.pem file': "{{ trmm_server_cert_privkey }}"
+          '(?m)^Username: ': "{{ trmm_superuser_username }}"
+          '(?m)^Password: ': "{{ trmm_server_superuser_password }}"
+          '(?m)^Password \(again\): ': "{{ trmm_server_superuser_password }}"
+          'Press any key to continue': ""
+      become: true
+      become_user: "{{ trmm_user }}"
+      environment:
+        LANG: "{{ baseline_locale | default('C.UTF-8') }}"
+        HOME: "{{ trmm_server_home }}"
+      register: trmm_server_install
+      no_log: true
+
+  rescue:
+    - name: Install | Show redacted tail of installer output
+      ansible.builtin.debug:
+        msg: >-
+          {{ (trmm_server_install.stdout | default('') | regex_replace('\x1b\[[0-9;]*[A-Za-z]', '')).splitlines()[-60:]
+             | map('regex_replace', '(?i)(password|setup key|token)(.*)$', '\1: <redacted>') | list }}
+
+    - name: Install | Fail
+      ansible.builtin.fail:
+        msg: >-
+          install.sh failed (rc={{ trmm_server_install.rc | default('n/a') }}). Do NOT re-run on this VM:
+          the installer requires a clean server. Revert the VM snapshot and retry.
+
+- name: Install | Extract generated credentials
+  when: not trmm_server_installed and not ansible_check_mode
+  vars:
+    _out: "{{ trmm_server_install.stdout | regex_replace('\x1b\\[[0-9;]*[A-Za-z]', '') }}"
+  ansible.builtin.set_fact:
+    trmm_server_credentials:
+      host: "{{ inventory_hostname }}"
+      created: "{{ now(utc=true).isoformat() }}"
+      trmm_version: "{{ trmm_version }}"
+      web_url: "https://{{ trmm_frontend_fqdn }}"
+      web_superuser: "{{ trmm_superuser_username }}"
+      web_superuser_password: "{{ trmm_server_superuser_password }}"
+      web_superuser_totp_secret: "{{ _out | regex_search('manually enter the setup key: ([A-Z2-7]+)', '\\1') | first | default('') }}"
+      mesh_url: "https://{{ trmm_mesh_fqdn }}"
+      mesh_username: "{{ _out | regex_search('MeshCentral username: (\\S+)', '\\1') | first | default('') }}"
+      mesh_password: "{{ _out | regex_search('MeshCentral password: (\\S+)', '\\1') | first | default('') }}"
+  no_log: true
+
+- name: Install | Write credentials to the controller (vault-encrypted, never plaintext)
+  when: not trmm_server_installed and not ansible_check_mode
+  delegate_to: localhost
+  become: false
+  block:
+    - name: Install | Credentials directory
+      ansible.builtin.file:
+        path: "{{ trmm_server_credentials_dir }}"
+        state: directory
+        mode: "0700"
+
+    - name: Install | Encrypted credentials file
+      ansible.builtin.copy:
+        dest: "{{ trmm_server_credentials_dir }}/{{ inventory_hostname }}.vault.yml"
+        content: >-
+          {{ trmm_server_credentials | to_nice_yaml
+             | ansible.builtin.vault(lookup('ansible.builtin.file', trmm_server_credentials_vault_password_file)) }}
+        decrypt: false
+        mode: "0600"
+        force: false
+      no_log: true
+
+- name: Install | Assert all generated credentials were captured
+  when: not trmm_server_installed and not ansible_check_mode
+  ansible.builtin.assert:
+    that:
+      - trmm_server_credentials.web_superuser_totp_secret | length >= 16
+      - trmm_server_credentials.mesh_username | length > 0
+      - trmm_server_credentials.mesh_password | length > 0
+    fail_msg: >-
+      Installer finished but some credentials were not captured; whatever was captured is in
+      credentials/{{ inventory_hostname }}.vault.yml. Reset the missing ones from the TRMM/Mesh UI.
+    quiet: true
+
+- name: Install | Read installed TRMM version
+  ansible.builtin.command: grep -m1 '^TRMM_VERSION' {{ trmm_server_settings_file }}
+  changed_when: false
+  check_mode: false
+  failed_when: false
+  register: trmm_server_installed_version_line
+
+- name: Install | Record installed version
+  ansible.builtin.set_fact:
+    trmm_server_installed_version: "{{ trmm_server_installed_version_line.stdout | regex_search('\"([^\"]+)\"', '\\1') | first | default('not installed') }}"
+
+- name: Install | Assert freshly installed version matches the pin
+  ansible.builtin.assert:
+    that: trmm_server_installed_version == trmm_version
+    fail_msg: "Installed {{ trmm_server_installed_version }} but pinned {{ trmm_version }} (upstream moved during install)."
+    quiet: true
+  when: not trmm_server_installed and not ansible_check_mode
+
+- name: Install | Report version drift on existing installs
+  ansible.builtin.debug:
+    msg: >-
+      Installed TRMM {{ trmm_server_installed_version }}; repository pin is {{ trmm_version }}.
+      {{ 'Update the pin after an upgrade.' if trmm_server_installed_version != trmm_version else 'In sync.' }}
+  when: trmm_server_installed
+
+- name: Install | Remove installer copy
+  ansible.builtin.file:
+    path: "{{ trmm_server_home }}/install.sh"
+    state: absent
+  when: not ansible_check_mode

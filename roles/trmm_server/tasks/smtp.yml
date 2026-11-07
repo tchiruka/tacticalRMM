@@ -1,0 +1,54 @@
+---
+# Sets the same fields as Settings > Global Settings > Email Alerts, through
+# TRMM's own model (core.models.CoreSettings, fields verified at v1.6.1).
+# Values are passed via environment variables so nothing secret appears in
+# the process list; the script only saves when something differs.
+
+- name: SMTP | Apply alert e-mail settings
+  ansible.builtin.command:
+    argv:
+      - "{{ trmm_server_python }}"
+      - manage.py
+      - shell
+      - -c
+      - |
+        import json, os
+        from core.models import CoreSettings
+        cs = CoreSettings.objects.first()
+        want = {
+            "smtp_host": os.environ["TRMM_SMTP_HOST"],
+            "smtp_port": int(os.environ["TRMM_SMTP_PORT"]),
+            "smtp_requires_auth": os.environ["TRMM_SMTP_AUTH"] == "true",
+            "smtp_host_user": os.environ["TRMM_SMTP_USER"],
+            "smtp_host_password": os.environ["TRMM_SMTP_PASSWORD"],
+            "smtp_from_email": os.environ["TRMM_SMTP_FROM"],
+            "smtp_from_name": os.environ["TRMM_SMTP_FROM_NAME"],
+            "email_alert_recipients": json.loads(os.environ["TRMM_SMTP_RECIPIENTS"]),
+        }
+        changed = [k for k, v in want.items() if getattr(cs, k) != v]
+        for k in changed:
+            setattr(cs, k, want[k])
+        if changed:
+            cs.save()
+            print("CHANGED " + ",".join(sorted(changed)))
+        else:
+            print("UNCHANGED")
+    chdir: "{{ trmm_server_api_dir }}"
+  environment:
+    TRMM_SMTP_HOST: "{{ trmm_smtp_host }}"
+    TRMM_SMTP_PORT: "{{ trmm_smtp_port | string }}"
+    TRMM_SMTP_AUTH: "{{ trmm_smtp_requires_auth | bool | string | lower }}"
+    TRMM_SMTP_USER: "{{ trmm_smtp_user }}"
+    TRMM_SMTP_PASSWORD: "{{ vault_trmm_smtp_password }}"
+    TRMM_SMTP_FROM: "{{ trmm_smtp_from_email }}"
+    TRMM_SMTP_FROM_NAME: "{{ trmm_smtp_from_name }}"
+    TRMM_SMTP_RECIPIENTS: "{{ trmm_alert_recipients | to_json }}"
+  become: true
+  become_user: "{{ trmm_user }}"
+  register: trmm_server_smtp
+  changed_when: trmm_server_smtp.stdout is search('CHANGED')
+  no_log: true
+  when:
+    - trmm_smtp_enabled | bool
+    - trmm_server_installed or (trmm_server_install.rc | default(1)) == 0
+    - not ansible_check_mode
