@@ -1,0 +1,13 @@
+---
+galaxy_info:
+  role_name: baseline
+  namespace: trmm
+  author: Infrastructure Engineering
+  description: Ubuntu 26.04 baseline for the Tactical RMM host (preflight, packages, users, SSH, time, journald, patching).
+  license: MIT
+  min_ansible_version: "2.16"
+  platforms:
+    - name: Ubuntu
+      versions:
+        - resolute
+dependencies: []

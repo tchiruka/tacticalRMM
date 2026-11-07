@@ -1,0 +1,22 @@
+---
+# Persistent, compressed journal forwarded to rsyslog. Size limits and the
+# remaining CIS 6.1.1.1.x settings are applied by the CIS role.
+- name: Journald | Baseline drop-in
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/10-baseline.conf
+    content: |
+      # Managed by Ansible (role baseline)
+      [Journal]
+      Storage=persistent
+      Compress=yes
+      ForwardToSyslog=yes
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart journald
+
+- name: Journald | rsyslog enabled
+  ansible.builtin.systemd_service:
+    name: rsyslog.service
+    state: started
+    enabled: true

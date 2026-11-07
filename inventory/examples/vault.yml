@@ -1,0 +1,38 @@
+---
+# TEMPLATE ONLY (outside group_vars/ so it is never auto-loaded).
+# Copy, fill in, then encrypt:
+#   cp inventory/examples/vault.yml inventory/group_vars/all/vault.yml
+#   ansible-vault encrypt inventory/group_vars/all/vault.yml
+# vault.yml is gitignored; keep the encrypted copy in your secrets store.
+
+# sudo password of the Ansible connection user (ansible_user in hosts.yml).
+vault_become_password: "CHANGE_ME"
+
+# SHA-512/yescrypt hashes for admin users, e.g.:
+#   mkpasswd -m yescrypt     (package: whois)
+vault_admin_password_hashes:
+  opsadmin: "CHANGE_ME"
+
+# GRUB superuser password hash (CIS 1.4.1). Generate with:
+#   grub-mkpasswd-pbkdf2      -> paste the "grub.pbkdf2.sha512..." string
+vault_grub_password_hash: "CHANGE_ME"
+
+# Optional: TRMM web superuser password. Leave empty to have one generated
+# during install (it is then written ONLY to credentials/<host>.vault.yml).
+vault_trmm_superuser_password: ""
+
+# certbot DNS plugin credentials file content (letsencrypt_dns01 mode).
+# Cloudflare example (scoped API token with Zone:DNS:Edit on the zone only):
+vault_certbot_dns_credentials: |
+  dns_cloudflare_api_token = CHANGE_ME
+
+# SMTP password for TRMM alert e-mails.
+vault_trmm_smtp_password: "CHANGE_ME"
+
+# Backup shipping credentials (only the block matching your destination).
+vault_trmm_backup_s3_access_key: "CHANGE_ME"
+vault_trmm_backup_s3_secret_key: "CHANGE_ME"
+# Private SSH key used by the backup job to push to the rsync target.
+vault_trmm_backup_rsync_ssh_key: ""
+# known_hosts line(s) for the rsync target (ssh-keyscan -t ed25519 host).
+vault_trmm_backup_rsync_known_hosts: ""

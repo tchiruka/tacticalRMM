@@ -1,0 +1,32 @@
+---
+- name: Preflight checks
+  ansible.builtin.import_tasks: preflight.yml
+  tags: [baseline, preflight]
+
+- name: Packages
+  ansible.builtin.import_tasks: packages.yml
+  tags: [baseline, packages]
+
+- name: Locale and time
+  ansible.builtin.import_tasks: time.yml
+  tags: [baseline, time]
+
+- name: Administrators
+  ansible.builtin.import_tasks: users.yml
+  tags: [baseline, users]
+
+- name: SSH
+  ansible.builtin.import_tasks: ssh.yml
+  tags: [baseline, ssh]
+
+- name: Journald
+  ansible.builtin.import_tasks: journald.yml
+  tags: [baseline, logging]
+
+- name: Unattended security updates
+  ansible.builtin.import_tasks: unattended_upgrades.yml
+  tags: [baseline, patching]
+
+- name: Block in-place release upgrades
+  ansible.builtin.import_tasks: release_upgrades.yml
+  tags: [baseline, patching]

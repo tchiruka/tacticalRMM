@@ -1,0 +1,13 @@
+---
+# Copy to inventory/hosts.yml (gitignored) and replace the placeholders.
+# 192.0.2.0/24 is the RFC 5737 documentation range – never a real host.
+all:
+  children:
+    trmm_servers:
+      hosts:
+        trmm01:
+          ansible_host: 192.0.2.10
+          # Admin account created at OS install time (key-based SSH, password
+          # set for sudo). Must also be listed in `admin_users` (site.yml).
+          ansible_user: opsadmin
+          ansible_become_password: "{{ vault_become_password }}"

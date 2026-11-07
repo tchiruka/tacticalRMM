@@ -1,0 +1,85 @@
+---
+# Environment-specific values. Copy to inventory/group_vars/all/site.yml
+# (gitignored) and edit. Kept outside group_vars/ so placeholders are never
+# auto-loaded by Ansible.
+# Nothing in this file is secret; secrets live in vault.yml (ansible-vault).
+# The preflight refuses to run while any value still ends in example.com /
+# example.net or contains CHANGE_ME.
+
+# --- Platform (informational; used in reports and the change record) --------
+site_platform: "VMware vSphere"          # or "OpenStack"
+site_expected_agents: 200
+
+# --- Tactical RMM FQDNs (3 sub-domains at the same depth, a-z 0-9 - only) ---
+trmm_api_fqdn: api.example.com
+trmm_frontend_fqdn: rmm.example.com
+trmm_mesh_fqdn: mesh.example.com
+trmm_root_domain: example.com
+trmm_admin_email: rmm-admin@example.com
+trmm_superuser_username: rmmadmin
+
+# --- TLS: letsencrypt_dns01 | own_cert ---------------------------------------
+trmm_tls_mode: letsencrypt_dns01
+# letsencrypt_dns01: certbot DNS plugin from the Ubuntu archive
+# (apt package python3-certbot-dns-<plugin>), e.g. cloudflare, rfc2136,
+# digitalocean, route53. Plugin credentials go in vault.yml.
+trmm_certbot_dns_plugin: cloudflare
+trmm_certbot_dns_propagation_seconds: 60
+# own_cert: PEM files on the CONTROLLER (outside the repo). Full chain required.
+trmm_own_cert_fullchain_src: ~/secure/trmm/fullchain.pem
+trmm_own_cert_privkey_src: ~/secure/trmm/privkey.pem
+
+# --- Network ---------------------------------------------------------------
+# Sources allowed to SSH (bastion / admin VPN). The controller must be inside.
+admin_ssh_cidrs:
+  - 198.51.100.0/24
+# Sources allowed to reach 443 (agents + technicians). Agents usually roam,
+# so internet-facing installs need 0.0.0.0/0 and ::/0.
+trmm_https_allowed_cidrs:
+  - 0.0.0.0/0
+  - ::/0
+
+# --- Time --------------------------------------------------------------------
+ntp_servers:
+  - ntp1.example.net
+  - ntp2.example.net
+
+# --- SMTP for TRMM alert e-mails (password in vault.yml) ---------------------
+trmm_smtp_enabled: true
+trmm_smtp_host: smtp.example.com
+trmm_smtp_port: 587
+trmm_smtp_requires_auth: true
+trmm_smtp_user: rmm-alerts@example.com
+trmm_smtp_from_email: rmm-alerts@example.com
+trmm_smtp_from_name: Tactical RMM
+trmm_alert_recipients:
+  - noc@example.com
+
+# --- Backups -----------------------------------------------------------------
+# Destination type: s3 (rclone) | rsync (SSH, e.g. a Veeam Linux repo host) | nfs
+trmm_backup_destination: s3
+trmm_backup_s3_endpoint: https://s3.example.com
+trmm_backup_s3_bucket: trmm-backups
+trmm_backup_s3_region: us-east-1
+trmm_backup_rsync_target: backup@backup.example.com:/srv/trmm-backups/
+trmm_backup_nfs_export: nas.example.com:/export/trmm-backups
+# age PUBLIC key(s). The matching private key is kept OFFLINE (password
+# manager / safe), never on the RMM server. Generate with: age-keygen
+trmm_backup_age_recipients:
+  - age1CHANGE_ME
+
+# --- Central logging (optional) ---------------------------------------------
+siem_enabled: false
+siem_host: siem.example.com
+siem_port: 6514
+siem_protocol: tcp
+siem_tls: true
+
+# --- Administrators -----------------------------------------------------------
+# Password hashes come from vault.yml (needed for sudo; SSH is key-only).
+admin_users:
+  - name: opsadmin
+    comment: "Ops administrator"
+    password_hash: "{{ vault_admin_password_hashes['opsadmin'] }}"
+    ssh_keys:
+      - "ssh-ed25519 AAAA_CHANGE_ME opsadmin@workstation"

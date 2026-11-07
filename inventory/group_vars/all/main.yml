@@ -1,0 +1,44 @@
+---
+# Deployment profile shared by all roles. Safe to commit: no site data,
+# no secrets. Site values: site.yml (gitignored, from inventory/examples/).
+
+# --- Supported platform (preflight hard-fails on anything else) -------------
+baseline_supported_distribution: Ubuntu
+baseline_supported_version: "26.04"
+
+# --- Tactical RMM pin --------------------------------------------------------
+# The official installer always clones the `master` branch and replaces
+# itself when the upstream SCRIPT_VERSION changes, so the version cannot be
+# pinned by passing a tag. Instead the preflight compares upstream `master`
+# with these values and refuses to install if anything moved. After
+# reviewing a new release, update all three values (and CHANGELOG.md).
+# Verified 2026-11-07 against tag v1.6.1 (commit 086e2d97).
+trmm_version: "1.6.1"
+trmm_install_script_version: "93"
+trmm_install_script_sha256: "51648ba506a0fedaca806202234e7edf34c4deff469bfa84f991de70933e0e70"
+
+# --- Accounts ------------------------------------------------------------------
+trmm_user: tactical
+# Only members of this group may log in over SSH (CIS 5.1.5).
+baseline_ssh_allow_group: sshlogin
+
+# --- Hardening toggles ---------------------------------------------------------
+# GRUB password (CIS 1.4.1). Boot is unrestricted; editing entries / the
+# GRUB shell needs the password.
+cis_grub_password_enabled: true
+# Local audit-log retention after rotation (days). Long-term retention
+# (PCI-DSS 10.5.1: 12 months) is provided by the SIEM and by backups.
+cis_audit_log_local_retention_days: 90
+
+# --- Monitoring ----------------------------------------------------------------
+trmm_healthcheck_enabled: true
+# Write Prometheus textfile metrics if node_exporter's collector dir exists.
+trmm_healthcheck_prometheus_textfile_dir: /var/lib/prometheus/node-exporter
+trmm_cert_warning_days: 21
+trmm_backup_max_age_hours: 26
+
+# --- Backups -------------------------------------------------------------------
+trmm_backup_enabled: true
+trmm_backup_schedule: "*-*-* 01:30:00"
+trmm_backup_local_retention_days: 7
+trmm_backup_remote_retention_days: 90

@@ -1,0 +1,223 @@
+---
+# Hard gates first: unsupported platforms and unedited placeholders stop the
+# run before anything is changed. Then record the actual 26.04 defaults on
+# the target (sudo, coreutils, time daemon, firewall, OpenSSH) in a report.
+
+- name: Preflight | Assert supported platform (TRMM installer requirements)
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] == baseline_supported_distribution
+      - ansible_facts['distribution_version'] == baseline_supported_version
+      - ansible_facts['architecture'] in ['x86_64', 'aarch64']
+      - not (ansible_facts['virtualization_type'] == 'lxc' and ansible_facts['virtualization_role'] == 'guest')
+      # install.sh refuses < 3627528 kB (≈3542 MiB)
+      - ansible_facts['memtotal_mb'] >= 3543
+    fail_msg: >-
+      Unsupported target: {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }}
+      {{ ansible_facts['architecture'] }}, {{ ansible_facts['memtotal_mb'] }} MiB RAM,
+      virt={{ ansible_facts['virtualization_type'] }}. TRMM {{ trmm_version }} supports
+      Ubuntu 26.04 (and Debian 13) on x86_64/aarch64 VMs with >= 4 GB RAM. Not continuing.
+    quiet: true
+
+- name: Preflight | Assert required site variables are defined
+  ansible.builtin.assert:
+    that:
+      - trmm_api_fqdn is defined
+      - trmm_frontend_fqdn is defined
+      - trmm_mesh_fqdn is defined
+      - trmm_root_domain is defined
+      - trmm_admin_email is defined
+      - admin_ssh_cidrs is defined and admin_ssh_cidrs | length > 0
+      - admin_users is defined and admin_users | length > 0
+      - ntp_servers is defined and ntp_servers | length > 0
+    fail_msg: "Copy inventory/examples/site.yml to inventory/group_vars/all/site.yml and fill it in."
+    quiet: true
+
+- name: Preflight | Assert placeholders were replaced
+  vars:
+    _placeholder_re: '(example\.(com|net|org)|CHANGE_ME|^192\.0\.2\.|^198\.51\.100\.|^203\.0\.113\.)'
+    _site_values: >-
+      {{ [trmm_api_fqdn, trmm_frontend_fqdn, trmm_mesh_fqdn, trmm_root_domain, trmm_admin_email]
+         + admin_ssh_cidrs + ntp_servers
+         + (admin_users | map(attribute='ssh_keys') | flatten) }}
+  when: not (baseline_allow_placeholders | bool)
+  ansible.builtin.assert:
+    that:
+      - _site_values | select('search', _placeholder_re) | list | length == 0
+    fail_msg: "Placeholder values still present: {{ _site_values | select('search', _placeholder_re) | list }}"
+    quiet: true
+
+- name: Preflight | Assert TRMM domain rules (docs.tacticalrmm.com/install_server)
+  vars:
+    _fqdns: "{{ [trmm_api_fqdn, trmm_frontend_fqdn, trmm_mesh_fqdn] }}"
+  ansible.builtin.assert:
+    that:
+      - _fqdns | select('match', '^[a-z0-9-]+(\.[a-z0-9-]+)+$') | list | length == 3
+      - _fqdns | select('search', '\.' ~ (trmm_root_domain | regex_escape) ~ '$') | list | length == 3
+      - _fqdns | map('split', '.') | map('length') | unique | list | length == 1
+      - _fqdns | unique | list | length == 3
+    fail_msg: >-
+      The three FQDNs must be distinct, use only a-z 0-9 and '-', share the
+      same depth and end in .{{ trmm_root_domain }}.
+    quiet: true
+
+- name: Preflight | Assert the Ansible user is a managed administrator
+  ansible.builtin.assert:
+    that:
+      - ansible_user in (admin_users | map(attribute='name') | list)
+    fail_msg: >-
+      ansible_user '{{ ansible_user }}' must be listed in admin_users, otherwise the
+      exclusive authorized_keys and AllowGroups settings would lock Ansible out.
+    quiet: true
+
+- name: Preflight | Read the SSH client address of this session
+  ansible.builtin.command: printenv SSH_CLIENT
+  become: false
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  register: _baseline_ssh_client
+
+- name: Preflight | Assert the controller/bastion is inside admin_ssh_cidrs (lock-out guard)
+  vars:
+    _src_ip: "{{ (_baseline_ssh_client.stdout | default('')).split(' ') | first }}"
+  when: _src_ip | length > 0
+  ansible.builtin.assert:
+    that:
+      - _src_ip is ansible.utils.in_any_network(admin_ssh_cidrs)
+    fail_msg: >-
+      This session comes from {{ _src_ip }}, which is not in admin_ssh_cidrs
+      {{ admin_ssh_cidrs }}. Enabling the firewall would cut Ansible off.
+    quiet: true
+
+- name: Preflight | Detect sudo implementation
+  ansible.builtin.command: sudo --version
+  changed_when: false
+  check_mode: false
+  register: _baseline_sudo_version
+
+- name: Preflight | Detect coreutils implementation
+  ansible.builtin.command: ls --version
+  changed_when: false
+  check_mode: false
+  register: _baseline_coreutils_version
+
+- name: Preflight | Detect OpenSSH version
+  ansible.builtin.command: ssh -V
+  changed_when: false
+  check_mode: false
+  register: _baseline_ssh_version
+
+- name: Preflight | Query algorithms supported by the installed OpenSSH
+  ansible.builtin.command: "ssh -Q {{ item }}"
+  changed_when: false
+  check_mode: false
+  loop: [cipher, mac, kex]
+  register: _baseline_ssh_query
+
+- name: Preflight | Gather package and service facts
+  ansible.builtin.package_facts:
+    manager: apt
+
+- name: Preflight | Gather service facts
+  ansible.builtin.service_facts:
+
+- name: Preflight | Read /tmp and /var/tmp mount details
+  ansible.builtin.command: "findmnt -kn -o TARGET,FSTYPE,OPTIONS {{ item }}"
+  changed_when: false
+  failed_when: false
+  check_mode: false
+  loop: [/tmp, /var/tmp, /dev/shm, /home, /var, /var/log, /var/log/audit]
+  register: _baseline_mounts
+
+- name: Preflight | Record detected platform facts
+  vars:
+    _svc: "{{ ansible_facts['services'] }}"
+    _pkgs: "{{ ansible_facts['packages'] }}"
+  ansible.builtin.set_fact:
+    baseline_sudo_impl: "{{ 'sudo-rs' if 'sudo-rs' in _baseline_sudo_version.stdout else 'sudo' }}"
+    baseline_coreutils_impl: "{{ 'uutils' if 'uutils' in _baseline_coreutils_version.stdout else 'gnu' }}"
+    baseline_openssh_version: "{{ (_baseline_ssh_version.stderr ~ _baseline_ssh_version.stdout) | trim }}"
+    baseline_ssh_supported:
+      cipher: "{{ _baseline_ssh_query.results[0].stdout_lines }}"
+      mac: "{{ _baseline_ssh_query.results[1].stdout_lines }}"
+      kex: "{{ _baseline_ssh_query.results[2].stdout_lines }}"
+    baseline_time_daemons_present: >-
+      {{ ['chrony', 'systemd-timesyncd', 'ntpsec', 'ntpd-rs', 'ntp'] | select('in', _pkgs) | list }}
+    baseline_firewalls_present: >-
+      {{ ['ufw', 'nftables', 'firewalld', 'iptables-persistent'] | select('in', _pkgs) | list }}
+    baseline_snapd_present: "{{ 'snapd' in _pkgs }}"
+    baseline_tmp_is_tmpfs: "{{ (_baseline_mounts.results[0].stdout.split() + ['', ''])[1] == 'tmpfs' }}"
+    baseline_separate_mounts: "{{ _baseline_mounts.results | selectattr('rc', 'equalto', 0) | map(attribute='item') | list }}"
+
+- name: Preflight | Assert configured SSH algorithms are supported by this sshd
+  ansible.builtin.assert:
+    that:
+      - baseline_ssh_ciphers | difference(baseline_ssh_supported.cipher) | length == 0
+      - baseline_ssh_macs | difference(baseline_ssh_supported.mac) | length == 0
+      - baseline_ssh_kex | difference(baseline_ssh_supported.kex) | length == 0
+    fail_msg: >-
+      Unsupported by {{ baseline_openssh_version }}:
+      ciphers={{ baseline_ssh_ciphers | difference(baseline_ssh_supported.cipher) }}
+      macs={{ baseline_ssh_macs | difference(baseline_ssh_supported.mac) }}
+      kex={{ baseline_ssh_kex | difference(baseline_ssh_supported.kex) }}
+    quiet: true
+
+- name: Preflight | Assert no unsupported firewall manager is present
+  ansible.builtin.assert:
+    that:
+      - "'firewalld' not in baseline_firewalls_present"
+      - "'iptables-persistent' not in baseline_firewalls_present"
+    fail_msg: "Only ufw (nftables backend) is supported; remove {{ baseline_firewalls_present }} first."
+    quiet: true
+
+- name: Preflight | Create local report directory
+  ansible.builtin.file:
+    path: "{{ baseline_report_dir }}"
+    state: directory
+    mode: "0750"
+  delegate_to: localhost
+  become: false
+  check_mode: false
+
+- name: Preflight | Write platform report to the controller
+  ansible.builtin.copy:
+    dest: "{{ baseline_report_dir }}/{{ inventory_hostname }}-preflight.json"
+    mode: "0640"
+    content: >-
+      {{ {
+        'host': inventory_hostname,
+        'os': ansible_facts['distribution'] ~ ' ' ~ ansible_facts['distribution_version'],
+        'kernel': ansible_facts['kernel'],
+        'arch': ansible_facts['architecture'],
+        'virtualization': ansible_facts['virtualization_type'],
+        'memtotal_mb': ansible_facts['memtotal_mb'],
+        'sudo_impl': baseline_sudo_impl,
+        'sudo_version': _baseline_sudo_version.stdout_lines | first,
+        'coreutils_impl': baseline_coreutils_impl,
+        'coreutils_version': _baseline_coreutils_version.stdout_lines | first,
+        'openssh': baseline_openssh_version,
+        'time_daemons_installed': baseline_time_daemons_present,
+        'firewalls_installed': baseline_firewalls_present,
+        'snapd_installed': baseline_snapd_present,
+        'tmp_is_tmpfs': baseline_tmp_is_tmpfs,
+        'separate_mounts': baseline_separate_mounts,
+        'mounts': _baseline_mounts.results | map(attribute='stdout') | select | list,
+        'apparmor': ansible_facts['apparmor']['status'] | default('unknown')
+      } | to_nice_json }}
+  delegate_to: localhost
+  become: false
+  check_mode: false
+
+- name: Preflight | Summary
+  ansible.builtin.debug:
+    msg:
+      - "sudo: {{ baseline_sudo_impl }} ({{ _baseline_sudo_version.stdout_lines | first }})"
+      - "coreutils: {{ baseline_coreutils_impl }} ({{ _baseline_coreutils_version.stdout_lines | first }})"
+      - "OpenSSH: {{ baseline_openssh_version }}"
+      - "time daemons installed: {{ baseline_time_daemons_present }}"
+      - "firewalls installed: {{ baseline_firewalls_present }}"
+      - "/tmp tmpfs: {{ baseline_tmp_is_tmpfs }}; separate mounts: {{ baseline_separate_mounts }}"
+      - >-
+        {{ 'WARNING: no separate /var/tmp, /var/log or /var/log/audit partition – CIS 1.1.2.5-7.x mount options cannot be applied'
+           if (['/var/tmp', '/var/log', '/var/log/audit'] | difference(baseline_separate_mounts) | length > 0) else 'partition layout OK' }}

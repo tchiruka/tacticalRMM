@@ -1,0 +1,20 @@
+---
+# Inbound flows. TRMM agents and technicians use only TCP 443; NATS
+# (4222) and its websocket (9235) bind to 127.0.0.1 and are reached through
+# nginx at wss://<api>/natsws. MeshCentral (4430/800), PostgreSQL (5432) and
+# Redis (6379) are local-only. Source: install.sh and
+# api/tacticalrmm/tacticalrmm/helpers.py at TRMM v1.6.1.
+trmm_firewall_ssh_port: 22
+trmm_firewall_https_port: 443
+
+# Legacy "USE_NATS_STANDARD" mode exposes NATS on 4222. Not used by a
+# standard install; keep false unless the TRMM docs require it for you.
+trmm_firewall_allow_nats_standard: false
+trmm_firewall_nats_allowed_cidrs: []
+
+# Outbound default stays "allow" – CIS 4.1.4 (deny outgoing) is Level 2 and
+# not adopted: update.sh needs GitHub, PyPI, npm, nginx.org, PGDG,
+# NodeSource and Let's Encrypt. See docs/cis-exceptions.md.
+trmm_firewall_outgoing_policy: allow
+
+trmm_firewall_logging: low
