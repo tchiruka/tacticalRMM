@@ -3,6 +3,8 @@
   ansible.builtin.apt:
     update_cache: true
     cache_valid_time: 3600
+  # Refreshing package lists is not a configuration change (idempotence gate).
+  changed_when: false
 
 - name: Packages | Install baseline packages
   ansible.builtin.apt:

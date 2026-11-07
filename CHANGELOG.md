@@ -6,6 +6,12 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-07
+
+First release. Pins: Tactical RMM v1.6.1, CIS Ubuntu Linux 26.04 LTS
+Benchmark v1.0.0 (Level 1 Server), ansible-lockdown UBUNTU26-CIS 0.9.0
+(`9746233c`). Static gates pass; not yet run against a target VM.
+
 ### Added
 - Repository scaffold: Ansible config, pinned Galaxy requirements, lint and
   secret-scanning tooling (yamllint, ansible-lint, shellcheck, gitleaks).
@@ -35,3 +41,18 @@ and the project uses [Semantic Versioning](https://semver.org/).
   auditd->syslog when SIEM is enabled; controlled reboot + TRMM recheck.
 - `03-cis-level1.yml`, `audit.yml` (Lynis + role audit, before/after),
   `site.yml`; `scripts/gen-cis-vars.py` to regenerate the control block.
+- CI (GitHub Actions, SHA-pinned): yamllint, ansible-lint (production
+  profile), shellcheck incl. rendered templates, syntax-check, gitleaks.
+- `scripts/audit.sh` (summary with pass rate and failed/skipped checks) and
+  `scripts/idempotence.sh` (second run must be changed=0).
+- Docs: README (architecture, ports, quick start, first-run sequence,
+  onboarding, assumptions), architecture, CIS exceptions register, runbook,
+  ITIL 4 change record, CIS/PCI DSS v4.0/ISO 27001:2022 mapping.
+
+### Security
+- faillock unlock time 1800 s (PCI DSS v4.0 8.3.4); weak SSH MACs removed
+  from the CIS role default list; vendor `allow OpenSSH from any` and
+  blanket `aa-enforce` avoided.
+
+[Unreleased]: <REMOTE_URL>/compare/v1.0.0...HEAD
+[1.0.0]: <REMOTE_URL>/releases/tag/v1.0.0

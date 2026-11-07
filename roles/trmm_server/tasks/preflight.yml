@@ -52,7 +52,7 @@
     owner: "{{ trmm_user }}"
     group: "{{ trmm_user }}"
     mode: "0750"
-  when: not trmm_server_installed
+  when: not trmm_server_installed and trmm_server_user_ready
 
 - name: Preflight | Read installer OS gate (informational, not modified)
   ansible.builtin.command: grep -F 'Only Debian 13 and Ubuntu 26.04 are supported' {{ trmm_server_home }}/install.sh
