@@ -3,6 +3,11 @@
 # This role owns the chrony sources (CIS 2.3.3.1); the CIS role keeps
 # 2.3.3.2 (_chrony user) and 2.3.3.3 (enabled/running).
 
+- name: Time | Read existing groups (read-only)
+  ansible.builtin.getent:
+    database: group
+  check_mode: false
+
 - name: Time | Set system locale
   ansible.builtin.copy:
     dest: /etc/default/locale
@@ -36,6 +41,8 @@
     group: _chrony
     mode: "0640"
   notify: Restart chrony
+  # _chrony exists once chrony is installed (default on 26.04).
+  when: not ansible_check_mode or '_chrony' in ansible_facts['getent_group'] | default({})
 
 - name: Time | Disable distribution default pools (only authorised sources)
   ansible.builtin.replace:

@@ -24,6 +24,17 @@
       rsync: [rsync, openssh-client]
       nfs: [nfs-common]
 
+- name: Backup | Check whether the service account exists (read-only)
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ trmm_user }}"
+    fail_key: false
+  check_mode: false
+
+- name: Backup | Tasks that need the account can run (always true outside check mode)
+  ansible.builtin.set_fact:
+    trmm_backup_user_ready: "{{ not ansible_check_mode or (ansible_facts['getent_passwd'][trmm_user] | default(none)) is not none }}"
+
 - name: Backup | Config directory
   ansible.builtin.file:
     path: "{{ trmm_backup_config_dir }}"
@@ -31,6 +42,7 @@
     owner: root
     group: "{{ trmm_user }}"
     mode: "0750"
+  when: trmm_backup_user_ready
 
 - name: Backup | State directory (readable by the health check)
   ansible.builtin.file:
@@ -39,6 +51,7 @@
     owner: "{{ trmm_user }}"
     group: "{{ trmm_user }}"
     mode: "0755"
+  when: trmm_backup_user_ready
 
 - name: Backup | age recipients (public keys only)
   ansible.builtin.copy:
@@ -47,6 +60,7 @@
     owner: root
     group: "{{ trmm_user }}"
     mode: "0640"
+  when: trmm_backup_user_ready
 
 - name: Backup | rclone S3 configuration
   ansible.builtin.copy:
@@ -63,10 +77,10 @@
     group: "{{ trmm_user }}"
     mode: "0640"
   no_log: true
-  when: trmm_backup_destination == 's3'
+  when: trmm_backup_destination == 's3' and trmm_backup_user_ready
 
 - name: Backup | rsync SSH key and pinned host key
-  when: trmm_backup_destination == 'rsync'
+  when: trmm_backup_destination == 'rsync' and trmm_backup_user_ready
   block:
     - name: Backup | rsync private key
       ansible.builtin.copy:

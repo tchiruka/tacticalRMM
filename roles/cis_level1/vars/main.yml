@@ -32,6 +32,9 @@ ubtu26cis_level_1: true
 ubtu26cis_level_2: false
 os_check: true
 ubtu26cis_disruption_high: true
+# The vendor "PRELIM | Run apt update" otherwise reports changed on every run
+# (changed_when: not <this>), which would break the idempotence gate.
+ubtu26cis_ignore_apt_update_changed_when: true
 # The wrapper reboots under its own control (cis_level1_reboot_allowed).
 skip_reboot: true
 
@@ -99,7 +102,8 @@ ubtu26cis_pass_inactive: 45
 ubtu26cis_passwd_hash_algo: yescrypt
 ubtu26cis_passwd_minlen_value: 14
 ubtu26cis_faillock_deny: 5
-ubtu26cis_faillock_unlock_time: 900
+# PCI-DSS v4.0 8.3.4: lock-out of at least 30 minutes (CIS allows 0 or >= 900).
+ubtu26cis_faillock_unlock_time: 1800
 ubtu26cis_shell_session_timeout: 900
 ubtu26cis_bash_umask: '027'
 ubtu26cis_root_umask: '0027'

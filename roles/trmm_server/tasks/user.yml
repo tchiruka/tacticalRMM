@@ -16,6 +16,17 @@
     password: "!"
     update_password: always
 
+- name: User | Check whether the service account exists (read-only)
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ trmm_user }}"
+    fail_key: false
+  check_mode: false
+
+- name: User | Tasks that need the account can run (always true outside check mode)
+  ansible.builtin.set_fact:
+    trmm_server_user_ready: "{{ not ansible_check_mode or (ansible_facts['getent_passwd'][trmm_user] | default(none)) is not none }}"
+
 - name: User | Home directory permissions (CIS 7.2.9)
   ansible.builtin.file:
     path: "{{ trmm_server_home }}"
@@ -23,6 +34,7 @@
     owner: "{{ trmm_user }}"
     group: "{{ trmm_user }}"
     mode: "0750"
+  when: trmm_server_user_ready
 
 - name: User | Passwordless sudo for the TRMM service account
   ansible.builtin.copy:

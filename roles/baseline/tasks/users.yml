@@ -1,4 +1,12 @@
 ---
+# In --check mode nothing is created, so tasks that need a group/user created
+# earlier in this run are skipped instead of failing (real runs: always run).
+- name: Users | Read existing groups and users (read-only)
+  ansible.builtin.getent:
+    database: "{{ item }}"
+  loop: [group, passwd]
+  check_mode: false
+
 - name: Users | SSH login group
   ansible.builtin.group:
     name: "{{ baseline_ssh_allow_group }}"
@@ -21,6 +29,7 @@
   loop_control:
     label: "{{ item.name }}"
   no_log: true
+  when: not ansible_check_mode or baseline_ssh_allow_group in ansible_facts['getent_group']
 
 - name: Users | Authorised SSH keys (exclusive)
   ansible.posix.authorized_key:
@@ -31,3 +40,4 @@
   loop: "{{ admin_users }}"
   loop_control:
     label: "{{ item.name }}"
+  when: not ansible_check_mode or item.name in ansible_facts['getent_passwd']

@@ -45,7 +45,19 @@ echo "syntax-check done"
 
 step "gitleaks (working tree + history)"
 if command -v gitleaks >/dev/null 2>&1; then
-  gitleaks dir --redact --no-banner . || rc=1
+  # Scan exactly what git would see (tracked + untracked, minus .gitignore);
+  # .venv/ and .galaxy/ contain third-party test fixtures.
+  snapshot="$(mktemp -d)"
+  git ls-files -z --cached --others --exclude-standard |
+    xargs -0 -I{} cp --parents {} "${snapshot}/"
+  expected="$(git ls-files --cached --others --exclude-standard | wc -l)"
+  copied="$(find "${snapshot}" -type f | wc -l)"
+  if [[ "${copied}" -ne "${expected}" ]]; then
+    echo "secret-scan snapshot incomplete (${copied}/${expected} files)"
+    rc=1
+  fi
+  gitleaks dir --redact --no-banner "${snapshot}" || rc=1
+  rm -rf "${snapshot}"
   if git rev-parse --verify HEAD >/dev/null 2>&1; then
     gitleaks git --redact --no-banner . || rc=1
   fi

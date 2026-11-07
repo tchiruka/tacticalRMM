@@ -17,6 +17,7 @@
     owner: "{{ trmm_user }}"
     group: "{{ trmm_user }}"
     mode: "0750"
+  when: trmm_server_user_ready
 
 - name: TLS | Let's Encrypt via DNS-01
   when: trmm_tls_mode == 'letsencrypt_dns01'
@@ -80,7 +81,7 @@
       when: not trmm_server_cert_copy.stat.exists
 
 - name: TLS | Operator-supplied certificate
-  when: trmm_tls_mode == 'own_cert'
+  when: trmm_tls_mode == 'own_cert' and trmm_server_user_ready
   block:
     - name: TLS | Full-chain certificate
       ansible.builtin.copy:
